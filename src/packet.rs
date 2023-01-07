@@ -1,3 +1,4 @@
+use sha2::Digest;
 use thrift::{
     protocol::{TBinaryInputProtocol, TSerializable},
     transport::ReadHalf,
@@ -28,10 +29,8 @@ pub fn parse_protocol_packet(bytes: &[u8]) -> Result<ProtocolPacket, ParsingErro
 // If a TIE Origin security envelope present, that is also returned. Finally, the unconsumed
 // portion of the input (which should correspond to the start of the raw `ProtocolPacket` data)
 // is returned.
-// Note that the contents of the security fingerprint are not verified--the only checking done here
-// is that the data starts with the correct magic bytes, the major version matches, and that all of
-// the fields are actually present. Additionally, the `ProtocolPacket` data itself is unparsed and
-// may be invalid.
+// This function will fail if either security envelope is found to be invalid.
+// Note that the `ProtocolPacket` data itself is unparsed and may be invalid.
 pub fn parse_security_envelope(
     bytes: &[u8],
 ) -> Result<
@@ -44,21 +43,64 @@ pub fn parse_security_envelope(
 > {
     let (outer_security_header, bytes) = OuterSecurityEnvelopeHeader::parse_packet(bytes)?;
 
+    // TODO: The node secret should be taken from the node's configuration.
+    let secret = "foobar";
+    if !validate_security_fingerprint(
+        outer_security_header.outer_key_id,
+        outer_security_header.security_fingerprint,
+        bytes,
+        secret,
+    ) {
+        return Err(ParsingError::InvalidOuterEnvelope);
+    }
+
     let (tie_origin_security_header, bytes) =
         if outer_security_header.remaining_tie_lifetime.is_none() {
             (None, bytes)
         } else {
             let (header, bytes) = TIEOriginSecurityEnvelopeHeader::parse_packet(bytes)?;
+            if !validate_security_fingerprint(
+                header.tie_origin_key_id,
+                header.security_fingerprint,
+                bytes,
+                secret,
+            ) {
+                return Err(ParsingError::InvalidTIEEnvelope);
+            }
             (Some(header), bytes)
         };
     Ok((outer_security_header, tie_origin_security_header, bytes))
+}
+
+/// Check the given security fingerprint in the header with the given bytes. Returns true if the
+/// fingerprint matches.
+pub fn validate_security_fingerprint(
+    key_id: KeyID,
+    fingerprint: &[u8],
+    bytes: &[u8],
+    secret: &str,
+) -> bool {
+    match key_id {
+        KeyID::Invalid => false,
+        KeyID::Sha256 => {
+            let mut hasher = sha2::Sha256::default();
+            hasher.update(secret);
+            hasher.update(bytes);
+            let hash = hasher.finalize();
+            fingerprint == &hash[..]
+        }
+        KeyID::Other(_) => {
+            println!("TODO: Implement other Outer Key ID values...");
+            false
+        }
+    }
 }
 
 #[derive(Debug)]
 pub struct OuterSecurityEnvelopeHeader<'a> {
     pub packet_number: PacketNumber,
     pub major_version: u8,
-    pub outer_key_id: OuterKeyID,
+    pub outer_key_id: KeyID,
     pub security_fingerprint: &'a [u8],
     pub weak_nonce_local: u16,
     pub weak_nonce_remote: u16,
@@ -144,25 +186,36 @@ impl From<u16> for PacketNumber {
     }
 }
 
-#[derive(Debug)]
-pub enum OuterKeyID {
+/// From https://www.ietf.org/archive/id/draft-ietf-rift-rift-15.pdf, Section 4.4.3 (Security Envelope)
+/// 8 bits to allow key rollovers. This implies key type and algorithm. Value
+/// `invalid_key_value_key` means that no valid fingerprint was computed. This key ID scope
+/// is local to the nodes on both ends of the adjacency.
+#[derive(Debug, Clone, Copy)]
+pub enum KeyID {
     Invalid,
-    Value(u8),
+    Sha256,
+    Other(u32),
 }
 
-impl From<u8> for OuterKeyID {
-    fn from(number: u8) -> OuterKeyID {
-        if number == INVALID_KEY_VALUE_KEY as u8 {
-            OuterKeyID::Invalid
+impl From<u8> for KeyID {
+    fn from(number: u8) -> KeyID {
+        (number as u32).into()
+    }
+}
+
+impl From<u32> for KeyID {
+    fn from(number: u32) -> KeyID {
+        if number == INVALID_KEY_VALUE_KEY as u32 {
+            KeyID::Invalid
         } else {
-            OuterKeyID::Value(number)
+            KeyID::Other(number)
         }
     }
 }
 
 #[derive(Debug)]
 pub struct TIEOriginSecurityEnvelopeHeader<'a> {
-    pub tie_origin_key_id: u32, // this is actually only 24 bits long
+    pub tie_origin_key_id: KeyID, // this is actually only 24 bits long
     pub fingerprint_length: u8,
     pub security_fingerprint: &'a [u8],
 }
@@ -175,8 +228,9 @@ impl<'a> TIEOriginSecurityEnvelopeHeader<'a> {
             let b0 = *bytes.get(0).ok_or(ParsingError::OutOfRange)?;
             let b1 = *bytes.get(1).ok_or(ParsingError::OutOfRange)?;
             let b2 = *bytes.get(2).ok_or(ParsingError::OutOfRange)?;
-            u32::from_be_bytes([b0, b1, b2, 0])
-        };
+            u32::from_be_bytes([0, b0, b1, b2])
+        }
+        .into();
         let fingerprint_length = get_u8(bytes, 3)?;
 
         let fingerprint_end = 4 + fingerprint_length as usize * 4;
@@ -217,6 +271,8 @@ fn get_u32(slice: &[u8], index: usize) -> Result<u32, ParsingError> {
 pub enum ParsingError {
     NotMagical,
     WrongMajorVersion,
+    InvalidOuterEnvelope,
+    InvalidTIEEnvelope,
     ThriftError(thrift::Error),
     OutOfRange,
 }
