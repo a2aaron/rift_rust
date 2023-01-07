@@ -1,3 +1,3 @@
 pub mod lie_exchange;
 mod models;
-mod packet;
+pub mod packet;
