@@ -3,7 +3,10 @@ use thrift::{
     transport::ReadHalf,
 };
 
-use crate::models::encoding::{ProtocolPacket, PROTOCOL_MAJOR_VERSION};
+use crate::models::{
+    common::{INVALID_KEY_VALUE_KEY, UNDEFINED_PACKET_NUMBER},
+    encoding::{ProtocolPacket, PROTOCOL_MAJOR_VERSION},
+};
 
 // Parse a slice of bytes into a ProtocolPacket. The ProtocolPacket should not be contained in a
 // security envelope.
@@ -42,7 +45,7 @@ pub fn parse_security_envelope(
     let (outer_security_header, bytes) = OuterSecurityEnvelopeHeader::parse_packet(bytes)?;
 
     let (tie_origin_security_header, bytes) =
-        if outer_security_header.remaining_tie_lifetime == 0xFFFFFFFF {
+        if outer_security_header.remaining_tie_lifetime.is_none() {
             (None, bytes)
         } else {
             let (header, bytes) = TIEOriginSecurityEnvelopeHeader::parse_packet(bytes)?;
@@ -53,14 +56,13 @@ pub fn parse_security_envelope(
 
 #[derive(Debug)]
 pub struct OuterSecurityEnvelopeHeader<'a> {
-    pub packet_number: u16,
+    pub packet_number: PacketNumber,
     pub major_version: u8,
-    pub outer_key_id: u8,
-    pub fingerprint_length: u8,
+    pub outer_key_id: OuterKeyID,
     pub security_fingerprint: &'a [u8],
     pub weak_nonce_local: u16,
     pub weak_nonce_remote: u16,
-    pub remaining_tie_lifetime: u32,
+    pub remaining_tie_lifetime: Option<u32>,
 }
 
 impl<'a> OuterSecurityEnvelopeHeader<'a> {
@@ -73,7 +75,7 @@ impl<'a> OuterSecurityEnvelopeHeader<'a> {
             return Err(ParsingError::NotMagical);
         }
 
-        let packet_number = get_u16(bytes, 2)?;
+        let packet_number = get_u16(bytes, 2)?.into();
 
         let _reserved = get_u8(bytes, 4)?;
 
@@ -82,7 +84,7 @@ impl<'a> OuterSecurityEnvelopeHeader<'a> {
             return Err(ParsingError::WrongMajorVersion);
         }
 
-        let outer_key_id = get_u8(bytes, 6)?;
+        let outer_key_id = get_u8(bytes, 6)?.into();
 
         let fingerprint_length = get_u8(bytes, 7)?;
         let fingerprint_end = 8 + fingerprint_length as usize * 4;
@@ -93,13 +95,18 @@ impl<'a> OuterSecurityEnvelopeHeader<'a> {
 
         let weak_nonce_local = get_u16(bytes, fingerprint_end)?;
         let weak_nonce_remote = get_u16(bytes, fingerprint_end + 2)?;
-        let remaining_tie_lifetime = get_u32(bytes, fingerprint_end + 4)?;
-
+        let remaining_tie_lifetime = {
+            let lifetime = get_u32(bytes, fingerprint_end + 4)?;
+            if lifetime == 0xFFFF_FFFF {
+                None
+            } else {
+                Some(lifetime)
+            }
+        };
         let header = OuterSecurityEnvelopeHeader {
             packet_number,
             major_version,
             outer_key_id,
-            fingerprint_length,
             security_fingerprint,
             weak_nonce_local,
             weak_nonce_remote,
@@ -107,6 +114,49 @@ impl<'a> OuterSecurityEnvelopeHeader<'a> {
         };
 
         Ok((header, &bytes[fingerprint_end + 8..]))
+    }
+}
+
+/// From https://www.ietf.org/archive/id/draft-ietf-rift-rift-15.pdf, Section 4.4.3 (Security Envelope)
+/// An optional, per adjacency, per packet type monotonically increasing number
+/// rolling over using sequence number arithmetic defined in Appendix A. A node SHOULD
+/// correctly set the number on subsequent packets or otherwise MUST set the value to
+/// `undefined_packet_number` as provided in the schema. This number can be used to detect
+/// losses and misordering in flooding for either operational purposes or in implementation to
+/// adjust flooding behavior to current link or buffer quality. This number MUST NOT be used to
+/// discard or validate the correctness of packets. Packet numbers are incremented on each
+/// interface and within that for each type of packet independently. This allows to parallelize
+/// packet generation and processing for different types within an implementation if so
+/// desired
+#[derive(Debug)]
+pub enum PacketNumber {
+    Undefined,
+    Value(u16),
+}
+
+impl From<u16> for PacketNumber {
+    fn from(number: u16) -> PacketNumber {
+        if number == UNDEFINED_PACKET_NUMBER as u16 {
+            PacketNumber::Undefined
+        } else {
+            PacketNumber::Value(number)
+        }
+    }
+}
+
+#[derive(Debug)]
+pub enum OuterKeyID {
+    Invalid,
+    Value(u8),
+}
+
+impl From<u8> for OuterKeyID {
+    fn from(number: u8) -> OuterKeyID {
+        if number == INVALID_KEY_VALUE_KEY as u8 {
+            OuterKeyID::Invalid
+        } else {
+            OuterKeyID::Value(number)
+        }
     }
 }
 
