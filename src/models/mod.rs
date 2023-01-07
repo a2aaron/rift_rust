@@ -1,3 +1,3 @@
 #![allow(unused)]
-mod common;
-mod encoding;
+pub mod common;
+pub mod encoding;
