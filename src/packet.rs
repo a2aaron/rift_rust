@@ -1,4 +1,24 @@
-use crate::models::encoding::PROTOCOL_MAJOR_VERSION;
+use thrift::{
+    protocol::{TBinaryInputProtocol, TSerializable},
+    transport::ReadHalf,
+};
+
+use crate::models::encoding::{ProtocolPacket, PROTOCOL_MAJOR_VERSION};
+
+// Parse a slice of bytes into a ProtocolPacket. The ProtocolPacket should not be contained in a
+// security envelope.
+pub fn parse_protocol_packet(bytes: &[u8]) -> Result<ProtocolPacket, ParsingError> {
+    // TODO: Should this be in "strict mode"?
+    // TODO: Parsing is done using `thrift`, but it seems that `thrift` does panic on some inputs.
+    // Maybe we should do the parsing in a way that can catch panics? (Notably it's possible to try
+    // and make thrift allocate huge amounts of memory, and memory allocation is not always a
+    // catchable panic...). Alternatively: We should maybe fix `thrift` ourselves?
+    let mut binary_protocol = TBinaryInputProtocol::new(ReadHalf::new(bytes), true);
+    let protocol_packet = ProtocolPacket::read_from_in_protocol(&mut binary_protocol)
+        .map_err(ParsingError::ThriftError)?;
+
+    Ok(protocol_packet)
+}
 
 // Parse a ProtocolPacket contained in a security envelope.
 // The returned tuple consists of three things. First is the header of the outer security envelope.
