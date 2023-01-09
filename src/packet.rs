@@ -216,122 +216,6 @@ impl<'a> OuterSecurityEnvelopeHeader<'a> {
     }
 }
 
-/// From https://www.ietf.org/archive/id/draft-ietf-rift-rift-15.pdf, Section 4.4.3 (Security Envelope)
-/// An optional, per adjacency, per packet type monotonically increasing number
-/// rolling over using sequence number arithmetic defined in Appendix A. A node SHOULD
-/// correctly set the number on subsequent packets or otherwise MUST set the value to
-/// `undefined_packet_number` as provided in the schema. This number can be used to detect
-/// losses and misordering in flooding for either operational purposes or in implementation to
-/// adjust flooding behavior to current link or buffer quality. This number MUST NOT be used to
-/// discard or validate the correctness of packets. Packet numbers are incremented on each
-/// interface and within that for each type of packet independently. This allows to parallelize
-/// packet generation and processing for different types within an implementation if so
-/// desired
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PacketNumber {
-    Undefined,
-    Value(u16),
-}
-
-impl From<u16> for PacketNumber {
-    fn from(number: u16) -> PacketNumber {
-        if number == UNDEFINED_PACKET_NUMBER as u16 {
-            PacketNumber::Undefined
-        } else {
-            PacketNumber::Value(number)
-        }
-    }
-}
-
-impl From<PacketNumber> for u16 {
-    fn from(value: PacketNumber) -> Self {
-        match value {
-            PacketNumber::Undefined => UNDEFINED_PACKET_NUMBER as u16,
-            PacketNumber::Value(value) => value,
-        }
-    }
-}
-
-/// From https://www.ietf.org/archive/id/draft-ietf-rift-rift-15.pdf, Section 4.4.3 (Security Envelope)
-/// 8 bits to allow key rollovers. This implies key type and algorithm. Value
-/// `invalid_key_value_key` means that no valid fingerprint was computed. This key ID scope
-/// is local to the nodes on both ends of the adjacency.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum KeyID {
-    Invalid,
-    Valid(NonZeroU32),
-}
-
-impl From<u8> for KeyID {
-    fn from(number: u8) -> KeyID {
-        (number as u32).into()
-    }
-}
-
-impl From<u32> for KeyID {
-    fn from(number: u32) -> KeyID {
-        if number == INVALID_KEY_VALUE_KEY as u32 {
-            KeyID::Invalid
-        } else {
-            KeyID::Valid(NonZeroU32::new(number).unwrap())
-        }
-    }
-}
-
-pub struct SecretKeyStore {
-    secrets: HashMap<NonZeroU32, Key>,
-}
-
-impl SecretKeyStore {
-    pub fn new() -> SecretKeyStore {
-        SecretKeyStore {
-            secrets: HashMap::new(),
-        }
-    }
-
-    pub fn add_secret(&mut self, id: NonZeroU32, secret: Key) -> Option<Key> {
-        self.secrets.insert(id, secret)
-    }
-
-    /// Returns true if the given fingerprint matches the given payload. If the key is not
-    /// in the keystore, then the fingerprint is always considered invalid.
-    fn validate(&self, key: NonZeroU32, fingerprint: &[u8], payload: &[u8]) -> bool {
-        let Some(key) = self.secrets.get(&key) else {
-            return false;
-        };
-        key.compute_fingerprint(&[payload]) == fingerprint
-    }
-}
-
-pub enum Key {
-    Sha256(String),
-}
-
-impl Key {
-    fn to_id(&self) -> KeyID {
-        match self {
-            Key::Sha256(_) => KeyID::Valid(NonZeroU32::new(1).unwrap()),
-        }
-    }
-
-    /// Returns the fingerprint of the given payloads. The fingerprint is computed as the following:
-    /// HASH(secret + payloads[0] + payloads[1] + ... + payloads[n])
-    /// Where "+" is the concatenation operation.
-    /// If the key is not in the keystore, a panic occurs
-    fn compute_fingerprint(&self, payloads: &[&[u8]]) -> Vec<u8> {
-        match self {
-            Key::Sha256(secret) => {
-                let mut hasher = sha2::Sha256::default();
-                hasher.update(secret);
-                for payload in payloads {
-                    hasher.update(payload);
-                }
-                hasher.finalize().to_vec()
-            }
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TIEOriginSecurityEnvelopeHeader<'a> {
     pub tie_origin_key_id: KeyID, // this is actually only 24 bits long
@@ -404,6 +288,122 @@ impl<'a> TIEOriginSecurityEnvelopeHeader<'a> {
         writer.write_all(&fingerprint)?;
 
         Ok(())
+    }
+}
+
+/// From https://www.ietf.org/archive/id/draft-ietf-rift-rift-15.pdf, Section 4.4.3 (Security Envelope)
+/// An optional, per adjacency, per packet type monotonically increasing number
+/// rolling over using sequence number arithmetic defined in Appendix A. A node SHOULD
+/// correctly set the number on subsequent packets or otherwise MUST set the value to
+/// `undefined_packet_number` as provided in the schema. This number can be used to detect
+/// losses and misordering in flooding for either operational purposes or in implementation to
+/// adjust flooding behavior to current link or buffer quality. This number MUST NOT be used to
+/// discard or validate the correctness of packets. Packet numbers are incremented on each
+/// interface and within that for each type of packet independently. This allows to parallelize
+/// packet generation and processing for different types within an implementation if so
+/// desired
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PacketNumber {
+    Undefined,
+    Value(u16),
+}
+
+impl From<u16> for PacketNumber {
+    fn from(number: u16) -> PacketNumber {
+        if number == UNDEFINED_PACKET_NUMBER as u16 {
+            PacketNumber::Undefined
+        } else {
+            PacketNumber::Value(number)
+        }
+    }
+}
+
+impl From<PacketNumber> for u16 {
+    fn from(value: PacketNumber) -> Self {
+        match value {
+            PacketNumber::Undefined => UNDEFINED_PACKET_NUMBER as u16,
+            PacketNumber::Value(value) => value,
+        }
+    }
+}
+
+pub struct SecretKeyStore {
+    secrets: HashMap<NonZeroU32, Key>,
+}
+
+impl SecretKeyStore {
+    pub fn new() -> SecretKeyStore {
+        SecretKeyStore {
+            secrets: HashMap::new(),
+        }
+    }
+
+    pub fn add_secret(&mut self, id: NonZeroU32, secret: Key) -> Option<Key> {
+        self.secrets.insert(id, secret)
+    }
+
+    /// Returns true if the given fingerprint matches the given payload. If the key is not
+    /// in the keystore, then the fingerprint is always considered invalid.
+    fn validate(&self, key: NonZeroU32, fingerprint: &[u8], payload: &[u8]) -> bool {
+        let Some(key) = self.secrets.get(&key) else {
+            return false;
+        };
+        key.compute_fingerprint(&[payload]) == fingerprint
+    }
+}
+
+pub enum Key {
+    Sha256(String),
+}
+
+impl Key {
+    fn to_id(&self) -> KeyID {
+        match self {
+            Key::Sha256(_) => KeyID::Valid(NonZeroU32::new(1).unwrap()),
+        }
+    }
+
+    /// Returns the fingerprint of the given payloads. The fingerprint is computed as the following:
+    /// HASH(secret + payloads[0] + payloads[1] + ... + payloads[n])
+    /// Where "+" is the concatenation operation.
+    /// If the key is not in the keystore, a panic occurs
+    fn compute_fingerprint(&self, payloads: &[&[u8]]) -> Vec<u8> {
+        match self {
+            Key::Sha256(secret) => {
+                let mut hasher = sha2::Sha256::default();
+                hasher.update(secret);
+                for payload in payloads {
+                    hasher.update(payload);
+                }
+                hasher.finalize().to_vec()
+            }
+        }
+    }
+}
+
+/// From https://www.ietf.org/archive/id/draft-ietf-rift-rift-15.pdf, Section 4.4.3 (Security Envelope)
+/// 8 bits to allow key rollovers. This implies key type and algorithm. Value
+/// `invalid_key_value_key` means that no valid fingerprint was computed. This key ID scope
+/// is local to the nodes on both ends of the adjacency.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeyID {
+    Invalid,
+    Valid(NonZeroU32),
+}
+
+impl From<u8> for KeyID {
+    fn from(number: u8) -> KeyID {
+        (number as u32).into()
+    }
+}
+
+impl From<u32> for KeyID {
+    fn from(number: u32) -> KeyID {
+        if number == INVALID_KEY_VALUE_KEY as u32 {
+            KeyID::Invalid
+        } else {
+            KeyID::Valid(NonZeroU32::new(number).unwrap())
+        }
     }
 }
 
