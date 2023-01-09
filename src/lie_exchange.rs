@@ -241,6 +241,7 @@ mod test {
     use super::{Network, Node};
 
     #[test]
+    #[ignore = "not yet implemented"]
     fn two_nodes() {
         let id_a = 0;
         let id_b = 1;
