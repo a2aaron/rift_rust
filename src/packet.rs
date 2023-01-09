@@ -66,18 +66,61 @@ pub fn parse_security_envelope<'a>(
     Ok((outer_security_header, tie_origin_security_header, bytes))
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OuterSecurityEnvelopeHeader<'a> {
     pub packet_number: PacketNumber,
     pub major_version: u8,
     pub outer_key_id: KeyID, // this is actually only 8 bits long
-    pub security_fingerprint: &'a [u8],
+    pub security_fingerprint: Cow<'a, [u8]>,
     pub weak_nonce_local: u16,
     pub weak_nonce_remote: u16,
     pub remaining_tie_lifetime: Option<u32>,
 }
 
 impl<'a> OuterSecurityEnvelopeHeader<'a> {
+    pub fn reseal(
+        self,
+        key: Key,
+        payload: &[u8],
+        weak_nonce_local: u16,
+        weak_nonce_remote: u16,
+        packet_number: PacketNumber,
+        tie_header: Option<(TIEOriginSecurityEnvelopeHeader, u32)>,
+    ) -> OuterSecurityEnvelopeHeader<'static> {
+        let (fingerprint, remaining_tie_lifetime) = match tie_header {
+            Some((tie_header, lifetime)) => {
+                let fingerprint = key.compute_fingerprint(&[
+                    &weak_nonce_local.to_be_bytes(),
+                    &weak_nonce_remote.to_be_bytes(),
+                    &lifetime.to_be_bytes(),
+                    &tie_header.first_four_bytes(),
+                    &tie_header.security_fingerprint,
+                    payload,
+                ]);
+                (fingerprint, Some(lifetime))
+            }
+            None => {
+                let fingerprint = key.compute_fingerprint(&[
+                    &weak_nonce_local.to_be_bytes(),
+                    &weak_nonce_remote.to_be_bytes(),
+                    &0xFFFF_FFFFu32.to_be_bytes(), // Lifetime value is all ones when the Origin TIE Header is not present
+                    payload,
+                ]);
+                (fingerprint, None)
+            }
+        };
+
+        OuterSecurityEnvelopeHeader {
+            packet_number,
+            major_version: PROTOCOL_MAJOR_VERSION as u8,
+            outer_key_id: key.to_id(),
+            security_fingerprint: Cow::Owned(fingerprint),
+            weak_nonce_local,
+            weak_nonce_remote,
+            remaining_tie_lifetime,
+        }
+    }
+
     fn parse_packet(
         bytes: &'a [u8],
     ) -> Result<(OuterSecurityEnvelopeHeader<'a>, &'a [u8], &'a [u8]), ParsingError> {
@@ -119,7 +162,7 @@ impl<'a> OuterSecurityEnvelopeHeader<'a> {
             packet_number,
             major_version,
             outer_key_id,
-            security_fingerprint,
+            security_fingerprint: Cow::Borrowed(security_fingerprint),
             weak_nonce_local,
             weak_nonce_remote,
             remaining_tie_lifetime,
@@ -132,7 +175,7 @@ impl<'a> OuterSecurityEnvelopeHeader<'a> {
 
     fn validate(&self, keystore: &SecretKeyStore, payload: &[u8]) -> bool {
         if let KeyID::Valid(key) = self.outer_key_id {
-            keystore.validate(key, self.security_fingerprint, payload)
+            keystore.validate(key, &self.security_fingerprint, payload)
         } else {
             // TODO: If the key id is invalid, should this return always false or always true?
             false
@@ -149,7 +192,7 @@ impl<'a> OuterSecurityEnvelopeHeader<'a> {
             KeyID::Valid(id) => [id.get() as u8],
         };
         let fingerprint_length = [(self.security_fingerprint.len() / 4) as u8];
-        let fingerprint = self.security_fingerprint;
+        let fingerprint = &self.security_fingerprint;
         let weak_nonce_local = self.weak_nonce_local.to_be_bytes();
         let weak_nonce_remote = self.weak_nonce_remote.to_be_bytes();
         let remaining_tie_lifetime = match self.remaining_tie_lifetime {
@@ -304,6 +347,22 @@ impl<'a> TIEOriginSecurityEnvelopeHeader<'a> {
         }
     }
 
+    // Return a slice of the first four bytes of the header.
+    // This corresponds to the Tie Origin Key ID (3 bytes) followed by the
+    // fingerprint length (1 byte).
+    fn first_four_bytes(&self) -> [u8; 4] {
+        // The bytes for the Tie Origin Key ID
+        let [a, b, c] = match self.tie_origin_key_id {
+            KeyID::Invalid => [0x0, 0x0, 0x0],
+            KeyID::Valid(id) => {
+                let [_, a, b, c] = id.get().to_be_bytes();
+                [a, b, c]
+            }
+        };
+        let fingerprint_length = (self.security_fingerprint.len() / 4) as u8;
+        [a, b, c, fingerprint_length]
+    }
+
     fn parse_packet(
         bytes: &'a [u8],
     ) -> Result<(TIEOriginSecurityEnvelopeHeader<'a>, &'a [u8]), ParsingError> {
@@ -338,18 +397,10 @@ impl<'a> TIEOriginSecurityEnvelopeHeader<'a> {
     }
 
     pub fn write(&self, mut writer: impl Write) -> std::io::Result<()> {
-        let tie_origin_key_id = match self.tie_origin_key_id {
-            KeyID::Invalid => [0x0, 0x0, 0x0],
-            KeyID::Valid(id) => {
-                let [_, a, b, c] = id.get().to_be_bytes();
-                [a, b, c]
-            }
-        };
-        let fingerprint_length = [(self.security_fingerprint.len() / 4) as u8];
+        let first_four_bytes = self.first_four_bytes();
         let fingerprint = &self.security_fingerprint;
 
-        writer.write_all(&tie_origin_key_id)?;
-        writer.write_all(&fingerprint_length)?;
+        writer.write_all(&first_four_bytes)?;
         writer.write_all(&fingerprint)?;
 
         Ok(())
@@ -466,7 +517,7 @@ mod test {
             packet_number: PacketNumber::Value(0x02),
             major_version: 0x06,
             outer_key_id: KeyID::Invalid,
-            security_fingerprint: &[],
+            security_fingerprint: Cow::Owned(vec![]),
             weak_nonce_local: 0x7e5c,
             weak_nonce_remote: 0x39c0,
             remaining_tie_lifetime: Some(0x00093a80),
@@ -571,13 +622,13 @@ mod test {
             packet_number: PacketNumber::Value(0x02),
             major_version: 0x06,
             outer_key_id: 0x03u32.into(),
-            security_fingerprint: &[
+            security_fingerprint: Cow::Owned(vec![
                 0x47, 0xb9, 0x2e, 0xfd, 0xd3, 0x4c, 0xf7, 0x1e, 0x01, 0x8f, 0x4b, 0x54, 0x8e, 0x19,
                 0xfa, 0xe4, 0xa6, 0x20, 0x93, 0x85, 0x8c, 0x4c, 0x17, 0xc3, 0x9e, 0x5b, 0xc5, 0xf3,
                 0x46, 0x13, 0xcb, 0x2d, 0x63, 0xb0, 0x8a, 0x01, 0xff, 0x6c, 0xe8, 0x78, 0x1e, 0x0c,
                 0xe0, 0xb2, 0xf5, 0xb9, 0xd4, 0xc8, 0x98, 0xce, 0xc3, 0x89, 0xf1, 0xf7, 0x6d, 0x9b,
                 0x5e, 0xc9, 0x38, 0x80, 0xd6, 0xbc, 0xd1, 0x40,
-            ],
+            ]),
             weak_nonce_local: 0x5519,
             weak_nonce_remote: 0x4cb9,
             remaining_tie_lifetime: Some(0x00093a80),
