@@ -66,7 +66,7 @@ pub fn parse_security_envelope<'a>(
     Ok((outer_security_header, tie_origin_security_header, bytes))
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OuterSecurityEnvelopeHeader<'a> {
     pub packet_number: PacketNumber,
     pub major_version: u8,
@@ -151,7 +151,7 @@ impl<'a> OuterSecurityEnvelopeHeader<'a> {
 /// interface and within that for each type of packet independently. This allows to parallelize
 /// packet generation and processing for different types within an implementation if so
 /// desired
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PacketNumber {
     Undefined,
     Value(u16),
@@ -171,7 +171,7 @@ impl From<u16> for PacketNumber {
 /// 8 bits to allow key rollovers. This implies key type and algorithm. Value
 /// `invalid_key_value_key` means that no valid fingerprint was computed. This key ID scope
 /// is local to the nodes on both ends of the adjacency.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyID {
     Invalid,
     Valid(NonZeroU32),
@@ -230,10 +230,9 @@ pub enum Key {
     Sha256(String),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TIEOriginSecurityEnvelopeHeader<'a> {
     pub tie_origin_key_id: KeyID, // this is actually only 24 bits long
-    pub fingerprint_length: u8,
     pub security_fingerprint: &'a [u8],
 }
 
@@ -257,7 +256,6 @@ impl<'a> TIEOriginSecurityEnvelopeHeader<'a> {
 
         let header = TIEOriginSecurityEnvelopeHeader {
             tie_origin_key_id,
-            fingerprint_length,
             security_fingerprint,
         };
         Ok((header, &bytes[fingerprint_end..]))
@@ -301,4 +299,108 @@ pub enum ParsingError {
     InvalidTIEEnvelope,
     ThriftError(thrift::Error),
     OutOfRange,
+}
+
+mod test {
+    use std::num::NonZeroU32;
+
+    use crate::{
+        models::{
+            common::{TIETypeType, TieDirectionType},
+            encoding::{
+                PacketContent, PacketHeader, PrefixTIEElement, ProtocolPacket, TIEElement,
+                TIEHeader, TIEPacket, TIEID,
+            },
+        },
+        packet::{parse_protocol_packet, TIEOriginSecurityEnvelopeHeader},
+    };
+
+    use super::{
+        parse_security_envelope, Key, KeyID, OuterSecurityEnvelopeHeader, PacketNumber,
+        SecretKeyStore,
+    };
+
+    fn get_keystore() -> SecretKeyStore {
+        let mut keystore = SecretKeyStore::new();
+        keystore.add_secret(
+            NonZeroU32::new(1u32).unwrap(),
+            Key::Sha256("super secret!".to_string()),
+        );
+        keystore
+    }
+
+    #[test]
+    fn test_deserialize_outer_and_tie_envelopes() {
+        // A packet containing the following data:
+        // RIFT Outer Security Envelope
+        //     Magic: 0xa1f7
+        //     Packet Number: 0x0002 (2)
+        //     RIFT Major Version: 6
+        //     Outer Key ID: 0
+        //     Fingerprint Length: 0
+        //     Fingerprint: <MISSING>
+        //     Weak Nonce Local: 0x7e5c
+        //     Weak Nonce Remote: 0x39c0
+        //     Remaining TIE Lifetime: 0x00093a80 (604800)
+        // RIFT TIE Origin Security Envelope
+        //     TIE Origin Key ID: 0x000000 (0)
+        //     Fingerprint Length: 0
+        // Routing In Fat Trees
+        #[rustfmt::skip]
+        let packet: [u8; 205] = [
+            // Outer Security Envelope
+            0xa1, 0xf7, // Magic
+            0x00, 0x02, // Packet Number
+            0x00, 0x06, // Major Version
+            0x00,       // Outer Key ID
+            0x00,       // Fingerprint Length (since this is zero, there is no fingerprint)
+            0x7e, 0x5c, // Weak Nonce Local
+            0x39, 0xc0, // Weak Nonce Remote
+            0x00, 0x09, 0x3a, 0x80, // Remaining TIE Lifetime
+            // TIE Origin Security Envelope
+            0x00, 0x00, 0x00, // TIE Origin Key ID
+            0x00,             // Fingerprint Length (since this is zero, there is no fingerprint)
+            // ProtocolPacket payload (This starts 20 bytes after the above headers)
+            0x0c, 0x00, 0x01, 0x03, 0x00, 0x01, 0x06, 0x06, 0x00, 0x02, 0x00, 0x01, 0x0a, 0x00,
+            0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0x03, 0x00, 0x04, 0x18, 0x00,
+            0x0c, 0x00, 0x02, 0x0c, 0x00, 0x04, 0x0c, 0x00, 0x01, 0x0c, 0x00, 0x02, 0x08, 0x00,
+            0x01, 0x00, 0x00, 0x00, 0x01, 0x0a, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x02, 0x08, 0x00, 0x03, 0x00, 0x00, 0x00, 0x03, 0x08, 0x00, 0x04, 0x00, 0x00,
+            0x00, 0x02, 0x00, 0x0a, 0x00, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+            0x00, 0x0c, 0x00, 0x02, 0x0c, 0x00, 0x02, 0x0d, 0x00, 0x01, 0x0c, 0x0c, 0x00, 0x00,
+            0x00, 0x02, 0x0c, 0x00, 0x01, 0x08, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x03, 0x00,
+            0x02, 0x00, 0x00, 0x00, 0x08, 0x00, 0x02, 0x00, 0x00, 0x00, 0x01, 0x02, 0x00, 0x06,
+            0x00, 0x02, 0x00, 0x07, 0x01, 0x00, 0x0c, 0x00, 0x02, 0x0b, 0x00, 0x01, 0x00, 0x00,
+            0x00, 0x10, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00, 0x00, 0x03, 0x00, 0x02, 0x00, 0x00, 0x00, 0x08, 0x00, 0x02, 0x00,
+            0x00, 0x00, 0x01, 0x02, 0x00, 0x06, 0x00, 0x02, 0x00, 0x07, 0x01, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0x00,
+        ];
+
+        let expected_outer_header = OuterSecurityEnvelopeHeader {
+            packet_number: PacketNumber::Value(0x02),
+            major_version: 0x06,
+            outer_key_id: KeyID::Invalid,
+            security_fingerprint: &[],
+            weak_nonce_local: 0x7e5c,
+            weak_nonce_remote: 0x39c0,
+            remaining_tie_lifetime: Some(0x00093a80),
+        };
+
+        let expected_tie_header = TIEOriginSecurityEnvelopeHeader {
+            tie_origin_key_id: KeyID::Invalid,
+            security_fingerprint: &[],
+        };
+
+        let expected_protocol_data = &packet[20..];
+
+        let (actual_outer_header, packet, _) =
+            OuterSecurityEnvelopeHeader::parse_packet(&packet).unwrap();
+        let (actual_tie_header, actual_protocol_data) =
+            TIEOriginSecurityEnvelopeHeader::parse_packet(packet).unwrap();
+
+        assert_eq!(actual_outer_header, expected_outer_header);
+        assert_eq!(actual_tie_header, expected_tie_header);
+        assert_eq!(actual_protocol_data, expected_protocol_data);
+    }
 }
