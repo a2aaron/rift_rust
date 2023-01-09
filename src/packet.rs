@@ -1,4 +1,4 @@
-use std::{collections::HashMap, num::NonZeroU32};
+use std::{collections::HashMap, io::Write, num::NonZeroU32};
 
 use sha2::Digest;
 use thrift::{
@@ -70,7 +70,7 @@ pub fn parse_security_envelope<'a>(
 pub struct OuterSecurityEnvelopeHeader<'a> {
     pub packet_number: PacketNumber,
     pub major_version: u8,
-    pub outer_key_id: KeyID,
+    pub outer_key_id: KeyID, // this is actually only 8 bits long
     pub security_fingerprint: &'a [u8],
     pub weak_nonce_local: u16,
     pub weak_nonce_remote: u16,
@@ -138,6 +138,39 @@ impl<'a> OuterSecurityEnvelopeHeader<'a> {
             false
         }
     }
+
+    pub fn write(&self, mut writer: impl Write) -> std::io::Result<()> {
+        let magic = [0xa1, 0xf7];
+        let packet_number = u16::from(self.packet_number).to_be_bytes();
+        let reserved = [0x0];
+        let major_version = self.major_version.to_be_bytes();
+        let outer_key_id = match self.outer_key_id {
+            KeyID::Invalid => [0x0],
+            KeyID::Valid(id) => [id.get() as u8],
+        };
+        let fingerprint_length = [(self.security_fingerprint.len() / 4) as u8];
+        let fingerprint = self.security_fingerprint;
+        let weak_nonce_local = self.weak_nonce_local.to_be_bytes();
+        let weak_nonce_remote = self.weak_nonce_remote.to_be_bytes();
+        let remaining_tie_lifetime = match self.remaining_tie_lifetime {
+            Some(lifetime) => lifetime,
+            None => 0xFFFF_FFFF,
+        }
+        .to_be_bytes();
+
+        writer.write_all(&magic)?;
+        writer.write_all(&packet_number)?;
+        writer.write_all(&reserved)?;
+        writer.write_all(&major_version)?;
+        writer.write_all(&outer_key_id)?;
+        writer.write_all(&fingerprint_length)?;
+        writer.write_all(&fingerprint)?;
+        writer.write_all(&weak_nonce_local)?;
+        writer.write_all(&weak_nonce_remote)?;
+        writer.write_all(&remaining_tie_lifetime)?;
+
+        Ok(())
+    }
 }
 
 /// From https://www.ietf.org/archive/id/draft-ietf-rift-rift-15.pdf, Section 4.4.3 (Security Envelope)
@@ -163,6 +196,15 @@ impl From<u16> for PacketNumber {
             PacketNumber::Undefined
         } else {
             PacketNumber::Value(number)
+        }
+    }
+}
+
+impl From<PacketNumber> for u16 {
+    fn from(value: PacketNumber) -> Self {
+        match value {
+            PacketNumber::Undefined => UNDEFINED_PACKET_NUMBER as u16,
+            PacketNumber::Value(value) => value,
         }
     }
 }
@@ -268,6 +310,24 @@ impl<'a> TIEOriginSecurityEnvelopeHeader<'a> {
             // TODO: If the key id is invalid, should this return always false or always true?
             false
         }
+    }
+
+    pub fn write(&self, mut writer: impl Write) -> std::io::Result<()> {
+        let tie_origin_key_id = match self.tie_origin_key_id {
+            KeyID::Invalid => [0x0, 0x0, 0x0],
+            KeyID::Valid(id) => {
+                let [_, a, b, c] = id.get().to_be_bytes();
+                [a, b, c]
+            }
+        };
+        let fingerprint_length = [(self.security_fingerprint.len() / 4) as u8];
+        let fingerprint = self.security_fingerprint;
+
+        writer.write_all(&tie_origin_key_id)?;
+        writer.write_all(&fingerprint_length)?;
+        writer.write_all(&fingerprint)?;
+
+        Ok(())
     }
 }
 
@@ -394,14 +454,20 @@ mod test {
 
         let expected_protocol_data = &packet[20..];
 
-        let (actual_outer_header, packet, _) =
+        let (actual_outer_header, payload, _) =
             OuterSecurityEnvelopeHeader::parse_packet(&packet).unwrap();
         let (actual_tie_header, actual_protocol_data) =
-            TIEOriginSecurityEnvelopeHeader::parse_packet(packet).unwrap();
+            TIEOriginSecurityEnvelopeHeader::parse_packet(payload).unwrap();
 
-        assert_eq!(actual_outer_header, expected_outer_header);
-        assert_eq!(actual_tie_header, expected_tie_header);
-        assert_eq!(actual_protocol_data, expected_protocol_data);
+        assert_eq!(expected_outer_header, actual_outer_header);
+        assert_eq!(expected_tie_header, actual_tie_header);
+        assert_eq!(expected_protocol_data, actual_protocol_data);
+
+        let mut actual_packet = vec![];
+        actual_outer_header.write(&mut actual_packet).unwrap();
+        actual_tie_header.write(&mut actual_packet).unwrap();
+        actual_packet.extend(actual_protocol_data);
+        assert_eq!(&packet, &actual_packet[..]);
     }
 
     #[test]
@@ -502,13 +568,19 @@ mod test {
 
         let expected_protocol_data = &packet[104..];
 
-        let (actual_outer_header, packet, _) =
+        let (actual_outer_header, payload, _) =
             OuterSecurityEnvelopeHeader::parse_packet(&packet).unwrap();
         let (actual_tie_header, actual_protocol_data) =
-            TIEOriginSecurityEnvelopeHeader::parse_packet(packet).unwrap();
+            TIEOriginSecurityEnvelopeHeader::parse_packet(payload).unwrap();
 
         assert_eq!(actual_outer_header, expected_outer_header);
         assert_eq!(actual_tie_header, expected_tie_header);
         assert_eq!(actual_protocol_data, expected_protocol_data);
+
+        let mut actual_packet = vec![];
+        actual_outer_header.write(&mut actual_packet).unwrap();
+        actual_tie_header.write(&mut actual_packet).unwrap();
+        actual_packet.extend(actual_protocol_data);
+        assert_eq!(&packet, &actual_packet[..]);
     }
 }
