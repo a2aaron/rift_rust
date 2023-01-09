@@ -1,4 +1,4 @@
-use std::{collections::HashMap, io::Write, num::NonZeroU32};
+use std::{borrow::Cow, collections::HashMap, io::Write, num::NonZeroU32};
 
 use sha2::Digest;
 use thrift::{
@@ -256,15 +256,7 @@ impl SecretKeyStore {
         let Some(key) = self.secrets.get(&key) else {
             return false;
         };
-        match key {
-            Key::Sha256(secret) => {
-                let mut hasher = sha2::Sha256::default();
-                hasher.update(secret);
-                hasher.update(payload);
-                let hash = hasher.finalize();
-                fingerprint == &hash[..]
-            }
-        }
+        key.compute_fingerprint(&[payload]) == fingerprint
     }
 }
 
@@ -272,13 +264,46 @@ pub enum Key {
     Sha256(String),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+impl Key {
+    fn to_id(&self) -> KeyID {
+        match self {
+            Key::Sha256(_) => KeyID::Valid(NonZeroU32::new(1).unwrap()),
+        }
+    }
+
+    /// Returns the fingerprint of the given payloads. The fingerprint is computed as the following:
+    /// HASH(secret + payloads[0] + payloads[1] + ... + payloads[n])
+    /// Where "+" is the concatenation operation.
+    /// If the key is not in the keystore, a panic occurs
+    fn compute_fingerprint(&self, payloads: &[&[u8]]) -> Vec<u8> {
+        match self {
+            Key::Sha256(secret) => {
+                let mut hasher = sha2::Sha256::default();
+                hasher.update(secret);
+                for payload in payloads {
+                    hasher.update(payload);
+                }
+                hasher.finalize().to_vec()
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TIEOriginSecurityEnvelopeHeader<'a> {
     pub tie_origin_key_id: KeyID, // this is actually only 24 bits long
-    pub security_fingerprint: &'a [u8],
+    pub security_fingerprint: Cow<'a, [u8]>,
 }
 
 impl<'a> TIEOriginSecurityEnvelopeHeader<'a> {
+    pub fn sealing(key: Key, payload: &[u8]) -> TIEOriginSecurityEnvelopeHeader {
+        let fingerprint = key.compute_fingerprint(&[payload]);
+        TIEOriginSecurityEnvelopeHeader {
+            tie_origin_key_id: key.to_id(),
+            security_fingerprint: Cow::Owned(fingerprint),
+        }
+    }
+
     fn parse_packet(
         bytes: &'a [u8],
     ) -> Result<(TIEOriginSecurityEnvelopeHeader<'a>, &'a [u8]), ParsingError> {
@@ -298,14 +323,14 @@ impl<'a> TIEOriginSecurityEnvelopeHeader<'a> {
 
         let header = TIEOriginSecurityEnvelopeHeader {
             tie_origin_key_id,
-            security_fingerprint,
+            security_fingerprint: Cow::from(security_fingerprint),
         };
         Ok((header, &bytes[fingerprint_end..]))
     }
 
     fn validate(&self, keystore: &SecretKeyStore, payload: &[u8]) -> bool {
         if let KeyID::Valid(key) = self.tie_origin_key_id {
-            keystore.validate(key, self.security_fingerprint, &payload)
+            keystore.validate(key, &self.security_fingerprint, &payload)
         } else {
             // TODO: If the key id is invalid, should this return always false or always true?
             false
@@ -321,7 +346,7 @@ impl<'a> TIEOriginSecurityEnvelopeHeader<'a> {
             }
         };
         let fingerprint_length = [(self.security_fingerprint.len() / 4) as u8];
-        let fingerprint = self.security_fingerprint;
+        let fingerprint = &self.security_fingerprint;
 
         writer.write_all(&tie_origin_key_id)?;
         writer.write_all(&fingerprint_length)?;
@@ -362,7 +387,7 @@ pub enum ParsingError {
 }
 
 mod test {
-    use std::num::NonZeroU32;
+    use std::{borrow::Cow, num::NonZeroU32};
 
     use crate::{
         models::{
@@ -449,7 +474,7 @@ mod test {
 
         let expected_tie_header = TIEOriginSecurityEnvelopeHeader {
             tie_origin_key_id: KeyID::Invalid,
-            security_fingerprint: &[],
+            security_fingerprint: Cow::Owned(vec![]),
         };
 
         let expected_protocol_data = &packet[20..];
@@ -560,10 +585,10 @@ mod test {
 
         let expected_tie_header = TIEOriginSecurityEnvelopeHeader {
             tie_origin_key_id: 0x010203u32.into(),
-            security_fingerprint: &[
+            security_fingerprint: Cow::Owned(vec![
                 0x06, 0xf8, 0x7b, 0x9d, 0xee, 0x5d, 0x4e, 0x1a, 0xee, 0x50, 0xb3, 0x2e, 0xc6, 0xb6,
                 0xff, 0x4d, 0x87, 0x6c, 0xef, 0x81,
-            ],
+            ]),
         };
 
         let expected_protocol_data = &packet[104..];
