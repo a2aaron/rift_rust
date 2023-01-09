@@ -437,33 +437,13 @@ pub enum ParsingError {
     OutOfRange,
 }
 
+#[cfg(test)]
 mod test {
-    use std::{borrow::Cow, num::NonZeroU32};
+    use std::borrow::Cow;
 
-    use crate::{
-        models::{
-            common::{TIETypeType, TieDirectionType},
-            encoding::{
-                PacketContent, PacketHeader, PrefixTIEElement, ProtocolPacket, TIEElement,
-                TIEHeader, TIEPacket, TIEID,
-            },
-        },
-        packet::{parse_protocol_packet, TIEOriginSecurityEnvelopeHeader},
-    };
+    use crate::packet::TIEOriginSecurityEnvelopeHeader;
 
-    use super::{
-        parse_security_envelope, Key, KeyID, OuterSecurityEnvelopeHeader, PacketNumber,
-        SecretKeyStore,
-    };
-
-    fn get_keystore() -> SecretKeyStore {
-        let mut keystore = SecretKeyStore::new();
-        keystore.add_secret(
-            NonZeroU32::new(1u32).unwrap(),
-            Key::Sha256("super secret!".to_string()),
-        );
-        keystore
-    }
+    use super::{KeyID, OuterSecurityEnvelopeHeader, PacketNumber};
 
     #[test]
     fn test_deserialize_outer_and_tie_envelopes() {
