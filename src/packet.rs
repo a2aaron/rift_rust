@@ -1,3 +1,5 @@
+use std::{collections::HashMap, num::NonZeroU32};
+
 use sha2::Digest;
 use thrift::{
     protocol::{TBinaryInputProtocol, TSerializable},
@@ -31,26 +33,21 @@ pub fn parse_protocol_packet(bytes: &[u8]) -> Result<ProtocolPacket, ParsingErro
 // is returned.
 // This function will fail if either security envelope is found to be invalid.
 // Note that the `ProtocolPacket` data itself is unparsed and may be invalid.
-pub fn parse_security_envelope(
-    bytes: &[u8],
+pub fn parse_security_envelope<'a>(
+    bytes: &'a [u8],
+    keystore: &SecretKeyStore,
 ) -> Result<
     (
-        OuterSecurityEnvelopeHeader,
-        Option<TIEOriginSecurityEnvelopeHeader>,
-        &[u8],
+        OuterSecurityEnvelopeHeader<'a>,
+        Option<TIEOriginSecurityEnvelopeHeader<'a>>,
+        &'a [u8],
     ),
     ParsingError,
 > {
-    let (outer_security_header, bytes) = OuterSecurityEnvelopeHeader::parse_packet(bytes)?;
+    let (outer_security_header, bytes, payload_with_nonces) =
+        OuterSecurityEnvelopeHeader::parse_packet(bytes)?;
 
-    // TODO: The node secret should be taken from the node's configuration.
-    let secret = "foobar";
-    if !validate_security_fingerprint(
-        outer_security_header.outer_key_id,
-        outer_security_header.security_fingerprint,
-        bytes,
-        secret,
-    ) {
+    if !outer_security_header.validate(keystore, payload_with_nonces) {
         return Err(ParsingError::InvalidOuterEnvelope);
     }
 
@@ -59,41 +56,14 @@ pub fn parse_security_envelope(
             (None, bytes)
         } else {
             let (header, bytes) = TIEOriginSecurityEnvelopeHeader::parse_packet(bytes)?;
-            if !validate_security_fingerprint(
-                header.tie_origin_key_id,
-                header.security_fingerprint,
-                bytes,
-                secret,
-            ) {
-                return Err(ParsingError::InvalidTIEEnvelope);
+
+            if !header.validate(keystore, bytes) {
+                return Err(ParsingError::InvalidOuterEnvelope);
             }
+
             (Some(header), bytes)
         };
     Ok((outer_security_header, tie_origin_security_header, bytes))
-}
-
-/// Check the given security fingerprint in the header with the given bytes. Returns true if the
-/// fingerprint matches.
-pub fn validate_security_fingerprint(
-    key_id: KeyID,
-    fingerprint: &[u8],
-    bytes: &[u8],
-    secret: &str,
-) -> bool {
-    match key_id {
-        KeyID::Invalid => false,
-        KeyID::Sha256 => {
-            let mut hasher = sha2::Sha256::default();
-            hasher.update(secret);
-            hasher.update(bytes);
-            let hash = hasher.finalize();
-            fingerprint == &hash[..]
-        }
-        KeyID::Other(_) => {
-            println!("TODO: Implement other Outer Key ID values...");
-            false
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -110,7 +80,7 @@ pub struct OuterSecurityEnvelopeHeader<'a> {
 impl<'a> OuterSecurityEnvelopeHeader<'a> {
     fn parse_packet(
         bytes: &'a [u8],
-    ) -> Result<(OuterSecurityEnvelopeHeader<'a>, &'a [u8]), ParsingError> {
+    ) -> Result<(OuterSecurityEnvelopeHeader<'a>, &'a [u8], &'a [u8]), ParsingError> {
         // Check RIFT_MAGIC bytes (RIFT_MAGIC value is expected to equal 0xA1F7)
         let rift_magic = get_u16(bytes, 0)?;
         if rift_magic != 0xA1F7 {
@@ -155,7 +125,18 @@ impl<'a> OuterSecurityEnvelopeHeader<'a> {
             remaining_tie_lifetime,
         };
 
-        Ok((header, &bytes[fingerprint_end + 8..]))
+        let payload = &bytes[fingerprint_end + 8..];
+        let payload_with_nonces = &bytes[fingerprint_end..];
+        Ok((header, payload, payload_with_nonces))
+    }
+
+    fn validate(&self, keystore: &SecretKeyStore, payload: &[u8]) -> bool {
+        if let KeyID::Valid(key) = self.outer_key_id {
+            keystore.validate(key, self.security_fingerprint, payload)
+        } else {
+            // TODO: If the key id is invalid, should this return always false or always true?
+            false
+        }
     }
 }
 
@@ -193,8 +174,7 @@ impl From<u16> for PacketNumber {
 #[derive(Debug, Clone, Copy)]
 pub enum KeyID {
     Invalid,
-    Sha256,
-    Other(u32),
+    Valid(NonZeroU32),
 }
 
 impl From<u8> for KeyID {
@@ -208,9 +188,46 @@ impl From<u32> for KeyID {
         if number == INVALID_KEY_VALUE_KEY as u32 {
             KeyID::Invalid
         } else {
-            KeyID::Other(number)
+            KeyID::Valid(NonZeroU32::new(number).unwrap())
         }
     }
+}
+
+pub struct SecretKeyStore {
+    secrets: HashMap<NonZeroU32, Key>,
+}
+
+impl SecretKeyStore {
+    pub fn new() -> SecretKeyStore {
+        SecretKeyStore {
+            secrets: HashMap::new(),
+        }
+    }
+
+    pub fn add_secret(&mut self, id: NonZeroU32, secret: Key) -> Option<Key> {
+        self.secrets.insert(id, secret)
+    }
+
+    /// Returns true if the given fingerprint matches the given payload. If the key is not
+    /// in the keystore, then the fingerprint is always considered invalid.
+    fn validate(&self, key: NonZeroU32, fingerprint: &[u8], payload: &[u8]) -> bool {
+        let Some(key) = self.secrets.get(&key) else {
+            return false;
+        };
+        match key {
+            Key::Sha256(secret) => {
+                let mut hasher = sha2::Sha256::default();
+                hasher.update(secret);
+                hasher.update(payload);
+                let hash = hasher.finalize();
+                fingerprint == &hash[..]
+            }
+        }
+    }
+}
+
+pub enum Key {
+    Sha256(String),
 }
 
 #[derive(Debug)]
@@ -224,7 +241,7 @@ impl<'a> TIEOriginSecurityEnvelopeHeader<'a> {
     fn parse_packet(
         bytes: &'a [u8],
     ) -> Result<(TIEOriginSecurityEnvelopeHeader<'a>, &'a [u8]), ParsingError> {
-        let tie_origin_key_id = {
+        let tie_origin_key_id: KeyID = {
             let b0 = *bytes.get(0).ok_or(ParsingError::OutOfRange)?;
             let b1 = *bytes.get(1).ok_or(ParsingError::OutOfRange)?;
             let b2 = *bytes.get(2).ok_or(ParsingError::OutOfRange)?;
@@ -244,6 +261,15 @@ impl<'a> TIEOriginSecurityEnvelopeHeader<'a> {
             security_fingerprint,
         };
         Ok((header, &bytes[fingerprint_end..]))
+    }
+
+    fn validate(&self, keystore: &SecretKeyStore, payload: &[u8]) -> bool {
+        if let KeyID::Valid(key) = self.tie_origin_key_id {
+            keystore.validate(key, self.security_fingerprint, &payload)
+        } else {
+            // TODO: If the key id is invalid, should this return always false or always true?
+            false
+        }
     }
 }
 
