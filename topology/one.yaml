@@ -1,0 +1,9 @@
+shards:
+  - id: 0
+    nodes:
+      - name: node1
+        level: 1
+        systemid: 111
+        interfaces:
+          - name: if1
+          - name: if2

@@ -1,0 +1,55 @@
+# Topology: 2n_l0_l1
+# 
+#  +------------+
+#  | node1      |
+#  | (level 1)  |
+#  | 1.1.1.0/24 |
+#  | 1.1.2.2/32 |
+#  +------------+
+#        | if1
+#        |
+#        | if1
+#  +------------+
+#  | node2      |
+#  | (level 0)  |
+#  | 2.2.1.0/24 |
+#  | 2.2.2.2/32 |
+#  +------------+
+
+shards:
+  - id: 0
+    nodes:
+      - name: node1
+        level: 1
+        systemid: 1
+        rx_lie_mcast_address: 224.0.1.1
+        rx_lie_v6_mcast_address: ff02::abcd:1
+        rx_lie_port: 20001
+        interfaces:
+          - name: if1 # Connected to node2-if1
+            tx_lie_port: 20002
+            rx_tie_port: 10001
+        v4prefixes:
+          - address: 1.1.1.0
+            mask: 24
+            metric: 1
+          - address: 1.1.2.2
+            mask: 32
+            metric: 2
+      - name: node2
+        level: 0
+        systemid: 2
+        rx_lie_mcast_address: 224.0.1.2
+        rx_lie_v6_mcast_address: ff02::abcd:2
+        rx_lie_port: 20002
+        interfaces:
+          - name: if1 # Connected to node1-if1
+            tx_lie_port: 20001
+            rx_tie_port: 10002
+        v4prefixes:
+          - address: 2.2.1.0
+            mask: 24
+            metric: 1
+          - address: 2.2.2.2
+            mask: 32
+            metric: 2
