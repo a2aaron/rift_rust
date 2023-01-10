@@ -1,5 +1,6 @@
 use std::{borrow::Cow, collections::HashMap, io::Write, num::NonZeroU32};
 
+use serde::{Deserialize, Serialize};
 use sha2::Digest;
 use thrift::{
     protocol::{TBinaryInputProtocol, TSerializable},
@@ -352,6 +353,7 @@ impl SecretKeyStore {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize)]
 pub enum Key {
     Sha256(String),
 }
