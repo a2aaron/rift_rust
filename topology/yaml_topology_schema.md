@@ -9,10 +9,10 @@ format below. We use an intuitive, loose format. The multiplicity is presented a
     X    - may not be supported in all released versions
 
     # comments
-    {1} const:
-    {?} keys:                              {8}
+    {1} const:                                            # see config.py for full schema
+    {?} authentication_keys:                              {8}
         {+} - id: <24-bit key number>
-        {1}   algorithm: [hmac-sha-256]
+        {1}   algorithm: [hmac-sha-256]                   # there are more algorithms available than this
         {1}   secret: <string>   
         {?}   private-secret: <string>     {7}
     {1} shards: 
@@ -20,12 +20,12 @@ format below. We use an intuitive, loose format. The multiplicity is presented a
             {1}   nodes: 
                 {*}   - name: <node name string>
                 {?}      passive (1)
-                {1}      level: [<numerical level> | undefined | leaf | leaf-2-leaf | top-of-fabric ] (2) 
+                {?}      level: [<numerical level> | undefined | leaf | leaf-2-leaf | top-of-fabric | superspine ] (2) 
                 {1}      systemid: <64-bit integer>
                 {?}      rx_lie_mcast_address: <unique V4 multicast address used to receive LIEs 
                                                 in dotted notation, e.g. 224.0.0.2>  (5)
                 {?}      rx_lie_v6_mcast_address: <unique v6 multicast address, e.g. FF02::0:2> (5)
-                {1}      rx_lie_port: <node-wide UDP Port used to receive LIEs> (4)
+                {?}      rx_lie_port: <node-wide UDP Port used to receive LIEs> (4)
                 {?}X     state_thrift_services_port: <TCP port to run state services>
                 {?}X     config_thrift_services_port: <TCP port to run config services>
                 {?}      generate_defaults: <boolean indicating whether southbound defaults are 
