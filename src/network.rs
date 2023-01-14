@@ -1,17 +1,16 @@
 use std::{
+    collections::HashMap,
     error::Error,
     io,
     net::{Ipv4Addr, Ipv6Addr, SocketAddrV4, UdpSocket},
-    sync::atomic::AtomicI64,
+    num::NonZeroU32,
 };
 
 use crate::{
-    lie_exchange::LinkFSM,
-    models::{common, encoding},
-    topology::{GlobalConstants, Interface, NodeDescription, TopologyDescription},
+    models::common,
+    packet::{self, SecretKeyStore},
+    topology::{GlobalConstants, Interface, Key, NodeDescription, TopologyDescription},
 };
-
-static ID: AtomicI64 = AtomicI64::new(0);
 
 // 224.0.0.120
 const DEFAULT_LIE_IPV4_MCAST_ADDRESS: Ipv4Addr = Ipv4Addr::new(224, 0, 0, 120);
@@ -21,6 +20,7 @@ const DEFAULT_LIE_IPV6_MCAST_ADDRESS: Ipv6Addr = Ipv6Addr::new(0xFF02, 0, 0, 0, 
 /// Represents a network of nodes
 pub struct Network {
     nodes: Vec<Node>,
+    keys: SecretKeyStore,
 }
 
 impl Network {
@@ -35,15 +35,27 @@ impl Network {
             })
             .map(|node| Node::from_desc(node, &desc.constant))
             .collect::<io::Result<_>>()?;
-        Ok(Network { nodes })
+
+        let keys: HashMap<NonZeroU32, Key> = desc
+            .authentication_keys
+            .iter()
+            .map(|key| (key.id, key.clone()))
+            .collect();
+        let keys = SecretKeyStore::new(keys);
+        Ok(Network { nodes, keys })
     }
 
     pub fn run(&mut self) -> Result<(), Box<dyn Error>> {
         loop {
             for node in &self.nodes {
-                let packet = node.check_recv()?;
+                let packet = node.recv_packet()?;
                 if !packet.is_empty() {
-                    println!("{:?}", packet);
+                    let (outer_header, tie_header, packet) =
+                        packet::parse_security_envelope(&packet, &self.keys)?;
+                    let packet = packet::parse_protocol_packet(&packet)?;
+                    println!("{:#?}", outer_header);
+                    println!("{:#?}", tie_header);
+                    println!("{:#?}", packet);
                 }
             }
         }
@@ -52,7 +64,6 @@ impl Network {
 
 /// A node
 pub struct Node {
-    is_passive: bool,
     links: Vec<Link>,
 }
 
@@ -61,7 +72,7 @@ impl Node {
         let rx_lie_v4 = desc.rx_lie_mcast_address.unwrap_or(
             constants
                 .rx_mcast_address
-                .unwrap_or((DEFAULT_LIE_IPV4_MCAST_ADDRESS)),
+                .unwrap_or(DEFAULT_LIE_IPV4_MCAST_ADDRESS),
         );
         let links = desc
             .interfaces
@@ -69,17 +80,14 @@ impl Node {
             .map(|desc| Link::from_desc(rx_lie_v4, desc))
             .collect::<io::Result<_>>()?;
 
-        Ok(Node {
-            links,
-            is_passive: desc.passive,
-        })
+        Ok(Node { links })
     }
 
-    pub fn packet_send(&mut self, packet: &[u8]) -> io::Result<usize> {
+    pub fn packet_send(&mut self, _packet: &[u8]) -> io::Result<usize> {
         todo!()
     }
 
-    pub fn check_recv(&self) -> io::Result<Vec<u8>> {
+    pub fn recv_packet(&self) -> io::Result<Vec<u8>> {
         let mut vec: Vec<u8> = vec![0; common::DEFAULT_MTU_SIZE as usize];
         let length = self.links[0].lie_socket.recv(&mut vec)?;
         vec.resize(length, 0u8);

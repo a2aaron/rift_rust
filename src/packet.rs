@@ -1,15 +1,16 @@
 use std::{borrow::Cow, collections::HashMap, io::Write, num::NonZeroU32};
 
-use serde::{Deserialize, Serialize};
-use sha2::Digest;
 use thrift::{
     protocol::{TBinaryInputProtocol, TSerializable},
     transport::ReadHalf,
 };
 
-use crate::models::{
-    common::{INVALID_KEY_VALUE_KEY, UNDEFINED_PACKET_NUMBER},
-    encoding::{ProtocolPacket, PROTOCOL_MAJOR_VERSION},
+use crate::{
+    models::{
+        common::{INVALID_KEY_VALUE_KEY, UNDEFINED_PACKET_NUMBER},
+        encoding::{ProtocolPacket, PROTOCOL_MAJOR_VERSION},
+    },
+    topology::Key,
 };
 
 // Parse a slice of bytes into a ProtocolPacket. The ProtocolPacket should not be contained in a
@@ -114,7 +115,7 @@ impl<'a> OuterSecurityEnvelopeHeader<'a> {
         OuterSecurityEnvelopeHeader {
             packet_number,
             major_version: PROTOCOL_MAJOR_VERSION as u8,
-            outer_key_id: key.to_id(),
+            outer_key_id: key.id.into(),
             security_fingerprint: Cow::Owned(fingerprint),
             weak_nonce_local,
             weak_nonce_remote,
@@ -178,8 +179,8 @@ impl<'a> OuterSecurityEnvelopeHeader<'a> {
         if let KeyID::Valid(key) = self.outer_key_id {
             keystore.validate(key, &self.security_fingerprint, payload)
         } else {
-            // TODO: If the key id is invalid, should this return always false or always true?
-            false
+            // TODO: If the key id is invalid, should we enforce that the security fingerprint is zero length?
+            true
         }
     }
 
@@ -227,7 +228,7 @@ impl<'a> TIEOriginSecurityEnvelopeHeader<'a> {
     pub fn sealing(key: Key, payload: &[u8]) -> TIEOriginSecurityEnvelopeHeader {
         let fingerprint = key.compute_fingerprint(&[payload]);
         TIEOriginSecurityEnvelopeHeader {
-            tie_origin_key_id: key.to_id(),
+            tie_origin_key_id: key.id.into(),
             security_fingerprint: Cow::Owned(fingerprint),
         }
     }
@@ -276,8 +277,8 @@ impl<'a> TIEOriginSecurityEnvelopeHeader<'a> {
         if let KeyID::Valid(key) = self.tie_origin_key_id {
             keystore.validate(key, &self.security_fingerprint, &payload)
         } else {
-            // TODO: If the key id is invalid, should this return always false or always true?
-            false
+            // TODO: If the key id is invalid, should we enforce that the security fingerprint is zero length?
+            true
         }
     }
 
@@ -333,10 +334,8 @@ pub struct SecretKeyStore {
 }
 
 impl SecretKeyStore {
-    pub fn new() -> SecretKeyStore {
-        SecretKeyStore {
-            secrets: HashMap::new(),
-        }
+    pub fn new(secrets: HashMap<NonZeroU32, Key>) -> SecretKeyStore {
+        SecretKeyStore { secrets }
     }
 
     pub fn add_secret(&mut self, id: NonZeroU32, secret: Key) -> Option<Key> {
@@ -350,36 +349,6 @@ impl SecretKeyStore {
             return false;
         };
         key.compute_fingerprint(&[payload]) == fingerprint
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub enum Key {
-    Sha256(String),
-}
-
-impl Key {
-    fn to_id(&self) -> KeyID {
-        match self {
-            Key::Sha256(_) => KeyID::Valid(NonZeroU32::new(1).unwrap()),
-        }
-    }
-
-    /// Returns the fingerprint of the given payloads. The fingerprint is computed as the following:
-    /// HASH(secret + payloads[0] + payloads[1] + ... + payloads[n])
-    /// Where "+" is the concatenation operation.
-    /// If the key is not in the keystore, a panic occurs
-    fn compute_fingerprint(&self, payloads: &[&[u8]]) -> Vec<u8> {
-        match self {
-            Key::Sha256(secret) => {
-                let mut hasher = sha2::Sha256::default();
-                hasher.update(secret);
-                for payload in payloads {
-                    hasher.update(payload);
-                }
-                hasher.finalize().to_vec()
-            }
-        }
     }
 }
 
@@ -406,6 +375,12 @@ impl From<u32> for KeyID {
         } else {
             KeyID::Valid(NonZeroU32::new(number).unwrap())
         }
+    }
+}
+
+impl From<NonZeroU32> for KeyID {
+    fn from(value: NonZeroU32) -> Self {
+        KeyID::Valid(value)
     }
 }
 
@@ -437,6 +412,32 @@ pub enum ParsingError {
     InvalidTIEEnvelope,
     ThriftError(thrift::Error),
     OutOfRange,
+}
+
+impl std::fmt::Display for ParsingError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ParsingError::NotMagical => write!(f, "packet did not start with magic bytes 0xA1F7"),
+            ParsingError::WrongMajorVersion => write!(f, "wrong major version used"),
+            ParsingError::InvalidOuterEnvelope => {
+                write!(f, "invalid outer envelope security fingerprint")
+            }
+            ParsingError::InvalidTIEEnvelope => {
+                write!(f, "invalid tie envelope security finger print")
+            }
+            ParsingError::ThriftError(_) => write!(f, "a thrift error occured"),
+            ParsingError::OutOfRange => write!(f, "end of packet reached early"),
+        }
+    }
+}
+
+impl std::error::Error for ParsingError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            ParsingError::ThriftError(err) => Some(err),
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]

@@ -34,7 +34,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("{:#?}", topology);
 
     let mut network = Network::from_desc(&topology, passivity)?;
-    network.run();
+    network.run()?;
     Ok(())
     // let mut bytes = vec![];
     // stdin()

@@ -3,6 +3,7 @@ use std::net::{Ipv4Addr, Ipv6Addr};
 use std::num::{NonZeroU32, NonZeroUsize};
 
 use serde::{Deserialize, Serialize};
+use sha2::Digest;
 
 /// A topology description which defines some aspects of the RIFT network, including:
 /// - What nodes exist
@@ -17,7 +18,7 @@ pub struct TopologyDescription {
     #[serde(rename = "const", default)]
     pub constant: GlobalConstants, // spec lies: this is optional
     #[serde(default)]
-    pub authentication_keys: Vec<KeyDescription>, // spec lies: this is called authentication_keys, not keys
+    pub authentication_keys: Vec<Key>, // spec lies: this is called authentication_keys, not keys
     pub shards: Vec<Shard>,
 }
 
@@ -55,8 +56,8 @@ pub struct GlobalConstants {
     pub flooding_reduction_similarity: Option<usize>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct KeyDescription {
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Key {
     pub id: NonZeroU32, // Actually a u24
     pub algorithm: KeyAlgorithm,
     secret: String,
@@ -64,7 +65,27 @@ pub struct KeyDescription {
     private_secret: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+impl Key {
+    /// Returns the fingerprint of the given payloads. The fingerprint is computed as the following:
+    /// HASH(secret + payloads[0] + payloads[1] + ... + payloads[n])
+    /// Where "+" is the concatenation operation.
+    /// If the key is not in the keystore, a panic occurs
+    pub fn compute_fingerprint(&self, payloads: &[&[u8]]) -> Vec<u8> {
+        match self.algorithm {
+            KeyAlgorithm::Sha256 => {
+                let mut hasher = sha2::Sha256::default();
+                hasher.update(self.secret.as_bytes());
+                for payload in payloads {
+                    hasher.update(payload);
+                }
+                hasher.finalize().to_vec()
+            }
+            _ => unimplemented!(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
 pub enum KeyAlgorithm {
     #[serde(rename = "hmac-sha-1")]
     HmacSha1,
