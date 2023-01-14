@@ -48,15 +48,8 @@ impl Network {
     pub fn run(&mut self) -> Result<(), Box<dyn Error>> {
         loop {
             for node in &self.nodes {
-                let packet = node.recv_packet()?;
-                if !packet.is_empty() {
-                    let (outer_header, tie_header, packet) =
-                        packet::parse_security_envelope(&packet, &self.keys)?;
-                    let packet = packet::parse_protocol_packet(&packet)?;
-                    println!("{:#?}", outer_header);
-                    println!("{:#?}", tie_header);
-                    println!("{:#?}", packet);
-                }
+                let packet = node.recv_packet(&self.keys)?;
+                println!("{:#?}", packet);
             }
         }
     }
@@ -87,11 +80,12 @@ impl Node {
         todo!()
     }
 
-    pub fn recv_packet(&self) -> io::Result<Vec<u8>> {
-        let mut vec: Vec<u8> = vec![0; common::DEFAULT_MTU_SIZE as usize];
-        let length = self.links[0].lie_socket.recv(&mut vec)?;
-        vec.resize(length, 0u8);
-        Ok(vec)
+    pub fn recv_packet(&self, keys: &SecretKeyStore) -> Result<ProtocolPacket, Box<dyn Error>> {
+        let mut bytes: Vec<u8> = vec![0; common::DEFAULT_MTU_SIZE as usize];
+        let length = self.links[0].lie_socket.recv(&mut bytes)?;
+        bytes.resize(length, 0u8);
+        let packet = packet::parse_and_validate(&bytes, keys)?;
+        Ok(packet)
     }
 }
 

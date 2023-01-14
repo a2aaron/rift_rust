@@ -13,9 +13,37 @@ use crate::{
     topology::Key,
 };
 
-// Parse a slice of bytes into a ProtocolPacket. The ProtocolPacket should not be contained in a
-// security envelope.
-pub fn parse_protocol_packet(bytes: &[u8]) -> Result<ProtocolPacket, ParsingError> {
+// Parse a ProtocolPacket contained in a security envelope.
+// The returned tuple consists of three things. First is the header of the outer security envelope.
+// If a TIE Origin security envelope present, that is also returned. Finally, the unconsumed
+// portion of the input (which should correspond to the start of the raw `ProtocolPacket` data)
+// is returned.
+// This function will fail if either security envelope is found to be invalid.
+// Note that the `ProtocolPacket` is expected to be valid. If it is invalid (despite having valid
+// fingerprints) then thrift will probably crash on parsing.
+pub fn parse_and_validate<'a>(
+    bytes: &'a [u8],
+    keystore: &SecretKeyStore,
+) -> Result<ProtocolPacket, ParsingError> {
+    let (outer_security_header, bytes, payload_with_nonces) =
+        OuterSecurityEnvelopeHeader::parse_packet(bytes)?;
+
+    if !outer_security_header.validate(keystore, payload_with_nonces) {
+        return Err(ParsingError::InvalidOuterEnvelope);
+    }
+
+    let bytes = if outer_security_header.remaining_tie_lifetime.is_none() {
+        bytes
+    } else {
+        let (header, bytes) = TIEOriginSecurityEnvelopeHeader::parse_packet(bytes)?;
+
+        if !header.validate(keystore, bytes) {
+            return Err(ParsingError::InvalidOuterEnvelope);
+        }
+
+        bytes
+    };
+
     // TODO: Should this be in "strict mode"?
     // TODO: Parsing is done using `thrift`, but it seems that `thrift` does panic on some inputs.
     // Maybe we should do the parsing in a way that can catch panics? (Notably it's possible to try
@@ -26,46 +54,6 @@ pub fn parse_protocol_packet(bytes: &[u8]) -> Result<ProtocolPacket, ParsingErro
         .map_err(ParsingError::ThriftError)?;
 
     Ok(protocol_packet)
-}
-
-// Parse a ProtocolPacket contained in a security envelope.
-// The returned tuple consists of three things. First is the header of the outer security envelope.
-// If a TIE Origin security envelope present, that is also returned. Finally, the unconsumed
-// portion of the input (which should correspond to the start of the raw `ProtocolPacket` data)
-// is returned.
-// This function will fail if either security envelope is found to be invalid.
-// Note that the `ProtocolPacket` data itself is unparsed and may be invalid.
-pub fn parse_security_envelope<'a>(
-    bytes: &'a [u8],
-    keystore: &SecretKeyStore,
-) -> Result<
-    (
-        OuterSecurityEnvelopeHeader<'a>,
-        Option<TIEOriginSecurityEnvelopeHeader<'a>>,
-        &'a [u8],
-    ),
-    ParsingError,
-> {
-    let (outer_security_header, bytes, payload_with_nonces) =
-        OuterSecurityEnvelopeHeader::parse_packet(bytes)?;
-
-    if !outer_security_header.validate(keystore, payload_with_nonces) {
-        return Err(ParsingError::InvalidOuterEnvelope);
-    }
-
-    let (tie_origin_security_header, bytes) =
-        if outer_security_header.remaining_tie_lifetime.is_none() {
-            (None, bytes)
-        } else {
-            let (header, bytes) = TIEOriginSecurityEnvelopeHeader::parse_packet(bytes)?;
-
-            if !header.validate(keystore, bytes) {
-                return Err(ParsingError::InvalidOuterEnvelope);
-            }
-
-            (Some(header), bytes)
-        };
-    Ok((outer_security_header, tie_origin_security_header, bytes))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
