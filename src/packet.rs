@@ -1,4 +1,4 @@
-use std::{borrow::Cow, collections::HashMap, io::Write, num::NonZeroU32};
+use std::{borrow::Cow, collections::HashMap, io::Write, num::NonZeroU32, ops::Range};
 
 use thrift::{
     protocol::{TBinaryInputProtocol, TSerializable},
@@ -129,7 +129,7 @@ impl<'a> OuterSecurityEnvelopeHeader<'a> {
         // Check RIFT_MAGIC bytes (RIFT_MAGIC value is expected to equal 0xA1F7)
         let rift_magic = get_u16(bytes, 0)?;
         if rift_magic != 0xA1F7 {
-            return Err(ParsingError::NotMagical);
+            return Err(ParsingError::NotMagical(rift_magic));
         }
 
         let packet_number = get_u16(bytes, 2)?.into();
@@ -138,7 +138,7 @@ impl<'a> OuterSecurityEnvelopeHeader<'a> {
 
         let major_version = get_u8(bytes, 5)?;
         if major_version != PROTOCOL_MAJOR_VERSION as u8 {
-            return Err(ParsingError::WrongMajorVersion);
+            return Err(ParsingError::WrongMajorVersion(major_version));
         }
 
         let outer_key_id = get_u8(bytes, 6)?.into();
@@ -148,7 +148,7 @@ impl<'a> OuterSecurityEnvelopeHeader<'a> {
 
         let security_fingerprint = &bytes
             .get(8..fingerprint_end)
-            .ok_or(ParsingError::OutOfRange)?;
+            .ok_or(ParsingError::OutOfRange(8..fingerprint_end, bytes.len()))?;
 
         let weak_nonce_local = get_u16(bytes, fingerprint_end)?;
         let weak_nonce_remote = get_u16(bytes, fingerprint_end + 2)?;
@@ -253,9 +253,10 @@ impl<'a> TIEOriginSecurityEnvelopeHeader<'a> {
         bytes: &'a [u8],
     ) -> Result<(TIEOriginSecurityEnvelopeHeader<'a>, &'a [u8]), ParsingError> {
         let tie_origin_key_id: KeyID = {
-            let b0 = *bytes.get(0).ok_or(ParsingError::OutOfRange)?;
-            let b1 = *bytes.get(1).ok_or(ParsingError::OutOfRange)?;
-            let b2 = *bytes.get(2).ok_or(ParsingError::OutOfRange)?;
+            let err = || ParsingError::OutOfRange(0..3, bytes.len());
+            let b0 = *bytes.get(0).ok_or(err())?;
+            let b1 = *bytes.get(1).ok_or(err())?;
+            let b2 = *bytes.get(2).ok_or(err())?;
             u32::from_be_bytes([0, b0, b1, b2])
         }
         .into();
@@ -264,7 +265,7 @@ impl<'a> TIEOriginSecurityEnvelopeHeader<'a> {
         let fingerprint_end = 4 + fingerprint_length as usize * 4;
         let security_fingerprint = bytes
             .get(4..fingerprint_end)
-            .ok_or(ParsingError::OutOfRange)?;
+            .ok_or(ParsingError::OutOfRange(4..fingerprint_end, bytes.len()))?;
 
         let header = TIEOriginSecurityEnvelopeHeader {
             tie_origin_key_id,
@@ -385,40 +386,44 @@ impl From<NonZeroU32> for KeyID {
 }
 
 fn get_u8(slice: &[u8], index: usize) -> Result<u8, ParsingError> {
-    let b0 = slice.get(index).ok_or(ParsingError::OutOfRange)?;
+    let b0 = slice
+        .get(index)
+        .ok_or(ParsingError::OutOfRange(index..index + 1, slice.len()))?;
     Ok(*b0)
 }
 
 fn get_u16(slice: &[u8], index: usize) -> Result<u16, ParsingError> {
-    let b0 = slice.get(index).ok_or(ParsingError::OutOfRange)?;
-    let b1 = slice.get(index + 1).ok_or(ParsingError::OutOfRange)?;
+    let err = || ParsingError::OutOfRange(index..index + 2, slice.len());
+    let b0 = slice.get(index).ok_or(err())?;
+    let b1 = slice.get(index + 1).ok_or(err())?;
     Ok(u16::from_be_bytes([*b0, *b1]))
 }
 
 fn get_u32(slice: &[u8], index: usize) -> Result<u32, ParsingError> {
-    let b0 = slice.get(index).ok_or(ParsingError::OutOfRange)?;
-    let b1 = slice.get(index + 1).ok_or(ParsingError::OutOfRange)?;
-    let b2 = slice.get(index + 2).ok_or(ParsingError::OutOfRange)?;
-    let b3 = slice.get(index + 3).ok_or(ParsingError::OutOfRange)?;
+    let err = || ParsingError::OutOfRange(index..index + 4, slice.len());
+    let b0 = slice.get(index).ok_or(err())?;
+    let b1 = slice.get(index + 1).ok_or(err())?;
+    let b2 = slice.get(index + 2).ok_or(err())?;
+    let b3 = slice.get(index + 3).ok_or(err())?;
 
     Ok(u32::from_be_bytes([*b0, *b1, *b2, *b3]))
 }
 
 #[derive(Debug)]
 pub enum ParsingError {
-    NotMagical,
-    WrongMajorVersion,
+    NotMagical(u16),
+    WrongMajorVersion(u8),
     InvalidOuterEnvelope,
     InvalidTIEEnvelope,
     ThriftError(thrift::Error),
-    OutOfRange,
+    OutOfRange(Range<usize>, usize),
 }
 
 impl std::fmt::Display for ParsingError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ParsingError::NotMagical => write!(f, "packet did not start with magic bytes 0xA1F7"),
-            ParsingError::WrongMajorVersion => write!(f, "wrong major version used"),
+            ParsingError::NotMagical(a) => write!(f, "expected packet to start with magic bytes 0xA1F7, got {:0x}", a),
+            ParsingError::WrongMajorVersion(actual) => write!(f, "expected major version to be {}, got {}", PROTOCOL_MAJOR_VERSION, actual),
             ParsingError::InvalidOuterEnvelope => {
                 write!(f, "invalid outer envelope security fingerprint")
             }
@@ -426,7 +431,7 @@ impl std::fmt::Display for ParsingError {
                 write!(f, "invalid tie envelope security finger print")
             }
             ParsingError::ThriftError(_) => write!(f, "a thrift error occured"),
-            ParsingError::OutOfRange => write!(f, "end of packet reached early"),
+            ParsingError::OutOfRange(range, length) => write!(f, "end of packet reached early (tried to access range {:?}, but packet is only of length {})", range, length),
         }
     }
 }
