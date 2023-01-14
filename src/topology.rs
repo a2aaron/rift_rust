@@ -15,10 +15,16 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TopologyDescription {
     #[serde(rename = "const", default)]
-    constant: GlobalConstants, // spec lies: this is optional
+    pub constant: GlobalConstants, // spec lies: this is optional
     #[serde(default)]
-    authentication_keys: Vec<KeyDescription>, // spec lies: this is called authentication_keys, not keys
-    shards: Vec<Shard>,
+    pub authentication_keys: Vec<KeyDescription>, // spec lies: this is called authentication_keys, not keys
+    pub shards: Vec<Shard>,
+}
+
+impl TopologyDescription {
+    pub fn get_nodes(&self) -> Vec<&NodeDescription> {
+        self.shards.iter().flat_map(|shard| &shard.nodes).collect()
+    }
 }
 
 /// The "const" field in the config isn't described in yaml_topology_schema.md for some reason.
@@ -39,27 +45,27 @@ pub struct TopologyDescription {
 /// },
 /// ```
 #[derive(Debug, Default, Serialize, Deserialize)]
-struct GlobalConstants {
-    tx_src_address: Option<Ipv4Addr>,
-    tx_v6_src_address: Option<Ipv6Addr>,
-    rx_mcast_address: Option<Ipv4Addr>,
-    lie_mcast_address: Option<Ipv4Addr>,
-    flooding_reduction: Option<bool>,
-    flooding_reduction_redundancy: Option<NonZeroUsize>,
-    flooding_reduction_similarity: Option<usize>,
+pub struct GlobalConstants {
+    pub tx_src_address: Option<Ipv4Addr>,
+    pub tx_v6_src_address: Option<Ipv6Addr>,
+    pub rx_mcast_address: Option<Ipv4Addr>,
+    pub lie_mcast_address: Option<Ipv4Addr>,
+    pub flooding_reduction: Option<bool>,
+    pub flooding_reduction_redundancy: Option<NonZeroUsize>,
+    pub flooding_reduction_similarity: Option<usize>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct KeyDescription {
-    id: NonZeroU32, // Actually a u24
-    algorithm: KeyAlgorithm,
+pub struct KeyDescription {
+    pub id: NonZeroU32, // Actually a u24
+    pub algorithm: KeyAlgorithm,
     secret: String,
     #[serde(rename = "private-secret")]
     private_secret: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-enum KeyAlgorithm {
+pub enum KeyAlgorithm {
     #[serde(rename = "hmac-sha-1")]
     HmacSha1,
     #[serde(rename = "hmac-sha-224")]
@@ -83,59 +89,59 @@ enum KeyAlgorithm {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct Shard {
-    id: u64,
-    nodes: Vec<Node>,
+pub struct Shard {
+    pub id: u64,
+    pub nodes: Vec<NodeDescription>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct Node {
-    name: String,
+pub struct NodeDescription {
+    pub name: String,
     #[serde(default = "default_false")]
-    passive: bool,
+    pub passive: bool,
     #[serde(default)]
-    level: Level, // spec lies: this is optional and defaults to "undefined" if not provided
+    pub level: Level, // spec lies: this is optional and defaults to "undefined" if not provided
     #[serde(rename = "systemid")]
-    system_id: SystemID,
-    rx_lie_mcast_address: Option<Ipv4Addr>,
-    rx_lie_v6_mcast_address: Option<Ipv6Addr>,
-    rx_lie_port: Option<usize>, // spec lies: this is optional
-    state_thrift_services_port: Option<usize>,
-    config_thrift_services_port: Option<usize>,
+    pub system_id: SystemID,
+    pub rx_lie_mcast_address: Option<Ipv4Addr>,
+    pub rx_lie_v6_mcast_address: Option<Ipv6Addr>,
+    pub rx_lie_port: Option<u16>, // spec lies: this is optional
+    pub state_thrift_services_port: Option<u16>,
+    pub config_thrift_services_port: Option<u16>,
     #[serde(default = "default_true")]
-    generate_defaults: bool,
-    active_key: Option<u32>, // Actually a u24
+    pub generate_defaults: bool,
+    pub active_key: Option<u32>, // Actually a u24
     #[serde(default)]
-    tie_validation: Validation,
-    interfaces: Vec<Interface>,
+    pub tie_validation: Validation,
+    pub interfaces: Vec<Interface>,
     #[serde(default)]
-    v4prefixes: Vec<V4Prefix>,
+    pub v4prefixes: Vec<V4Prefix>,
     #[serde(default)]
-    v6prefixes: Vec<V6Prefix>,
+    pub v6prefixes: Vec<V6Prefix>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct Interface {
-    name: String,
-    bandwidth: Option<usize>,
-    metric: Option<NonZeroUsize>,
-    tx_lie_port: Option<usize>,
-    rx_lie_port: Option<usize>,
-    rx_tie_port: Option<usize>,
+pub struct Interface {
+    pub name: String,
+    pub bandwidth: Option<usize>,
+    pub metric: Option<NonZeroUsize>,
+    pub tx_lie_port: Option<u16>,
+    pub rx_lie_port: Option<u16>,
+    pub rx_tie_port: Option<u16>,
     #[serde(default = "default_false")]
-    advertise_subnet: bool,
-    active_key: Option<u8>,
+    pub advertise_subnet: bool,
+    pub active_key: Option<u8>,
     #[serde(default)]
-    accept_keys: HashSet<u8>,
+    pub accept_keys: HashSet<u8>,
     #[serde(default)]
-    link_validation: Validation,
+    pub link_validation: Validation,
 }
 
 // TODO: I don't like `NamedLevel` being distinct, but I can't figure out how to do this otherwise
 // Maybe I should implement Serialize/Deserialize manually?
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
-enum Level {
+pub enum Level {
     Number(usize),
     NamedLevel(NamedLevel),
 }
@@ -148,7 +154,7 @@ impl Default for Level {
 
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
-enum NamedLevel {
+pub enum NamedLevel {
     Undefined,
     Leaf,
     LeafToLeaf,
@@ -159,10 +165,10 @@ enum NamedLevel {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct SystemID(u64);
+pub struct SystemID(u64);
 
 #[derive(Debug, Default, Serialize, Deserialize)]
-enum Validation {
+pub enum Validation {
     #[default]
     None,
     Permissive,
@@ -171,17 +177,17 @@ enum Validation {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct V4Prefix {
-    address: Ipv4Addr,
-    mask: usize,
-    metric: NonZeroUsize,
+pub struct V4Prefix {
+    pub address: Ipv4Addr,
+    pub mask: usize,
+    pub metric: NonZeroUsize,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct V6Prefix {
-    address: Ipv6Addr,
-    mask: usize,
-    metric: NonZeroUsize,
+pub struct V6Prefix {
+    pub address: Ipv6Addr,
+    pub mask: usize,
+    pub metric: NonZeroUsize,
 }
 
 const fn default_false() -> bool {

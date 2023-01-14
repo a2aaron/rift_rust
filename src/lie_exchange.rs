@@ -1,76 +1,13 @@
-use std::{
-    collections::VecDeque,
-    sync::atomic::{AtomicI64, Ordering},
-};
+use std::collections::VecDeque;
 
 use crate::models::common::{LevelType, SystemIDType};
-
-static ID: AtomicI64 = AtomicI64::new(0);
-
-/// Represents a network of nodes
-pub struct Network {
-    nodes: Vec<Node>,
-}
-
-impl Network {
-    pub fn run(&mut self) {
-        todo!()
-    }
-
-    pub fn get(&self, id: SystemIDType) -> Option<&Node> {
-        self.nodes.iter().find(|node| node.system_id == id)
-    }
-}
-
-/// A node during LIE Exchange
-pub struct Node {
-    /// The list of available physical neighbors.
-    links: Vec<Link>,
-    /// If not None, then the Node will end up with a discovered_level equal to this value at the end
-    /// of LIE exchange (or else the LIE exchange will fail). Otherwise, the Node will discover it's
-    /// own level itself.
-    configured_level: Option<LevelType>,
-    /// The actual level of this node. At the start of LIE exchange, this is None, as the node does
-    /// not yet know it's level. By the end of LIE exchange, this value is Some.
-    /// This should match configured_level if configured_level is not None.
-    discovered_level: Option<LevelType>,
-    system_id: SystemIDType,
-}
-
-impl Node {
-    pub fn new(configured_level: Option<LevelType>, system_id: SystemIDType) -> Node {
-        Node {
-            links: vec![],
-            configured_level,
-            discovered_level: None,
-            system_id,
-        }
-    }
-
-    pub fn add_link(&mut self, other: &Node) {
-        self.links.push(Link {
-            lie_state: LIEState::OneWay,
-            other: other.system_id,
-            external_event_queue: VecDeque::new(),
-            chained_event_queue: VecDeque::new(),
-        })
-    }
-
-    pub fn on_timer(&mut self) {
-        todo!()
-    }
-
-    pub fn on_packet_recv(&mut self) {
-        todo!()
-    }
-}
 
 /// A Link representing a connection from one Node to another Node. Note that these are physical Links
 /// (that is to say, they are links which are physical present in the topology, but not nessecarily
 /// links which that will be considered to be logically present in the topology later on.)
 /// Note that this struct represents only one direction in a link--the other linked Node also has it's
 /// own Link pointing back to the first Node.
-struct Link {
+pub struct LinkFSM {
     /// Determines if a link is logically present in the topology. If the LIEState is ThreeWay, then
     /// the link is logically present. Otherwise, it is not.
     lie_state: LIEState,
@@ -80,7 +17,7 @@ struct Link {
     other: SystemIDType,
 }
 
-impl Link {
+impl LinkFSM {
     pub fn process_next_lie_event(&mut self) {
         // fetch an event out of (one of?) the queues and process it.
         todo!()
@@ -89,7 +26,7 @@ impl Link {
     fn process_lie_event(
         &mut self,
         event: LIEEvent,
-    ) -> (LIEState, &'static [LIEEvent], &'static [fn(&mut Link)]) {
+    ) -> (LIEState, &'static [LIEEvent], &'static [fn(&mut LinkFSM)]) {
         match (self.lie_state, event) {
             (LIEState::OneWay, LIEEvent::TimerTick) => todo!(),
             (LIEState::OneWay, LIEEvent::LevelChanged) => todo!(),
@@ -180,7 +117,7 @@ impl Link {
 }
 
 #[derive(Debug, Clone, Copy)]
-enum LIEState {
+pub enum LIEState {
     OneWay,
     TwoWay,
     ThreeWay,
@@ -188,7 +125,7 @@ enum LIEState {
 }
 
 #[derive(Debug, Clone, Copy)]
-enum LIEEvent {
+pub enum LIEEvent {
     /// One second timer tick, i.e. the event is generated for FSM by some external entity once a
     /// second. To be quietly ignored if transition does not exist.
     TimerTick,
@@ -235,29 +172,28 @@ enum LIEEvent {
     UpdateZTPOffer,
 }
 
+#[cfg(test)]
 mod test {
-    use crate::models::common::{LevelType, LEAF_LEVEL, TOP_OF_FABRIC_LEVEL};
-
-    use super::{Network, Node};
+    use crate::models::common::{LEAF_LEVEL, TOP_OF_FABRIC_LEVEL};
 
     #[test]
     #[ignore = "not yet implemented"]
     fn two_nodes() {
-        let id_a = 0;
-        let id_b = 1;
-        let mut top_of_fabric = Node::new(Some(TOP_OF_FABRIC_LEVEL), id_a);
-        let mut leaf_node = Node::new(None, id_b);
-        top_of_fabric.add_link(&leaf_node);
-        leaf_node.add_link(&top_of_fabric);
+        // let id_a = 0;
+        // let id_b = 1;
+        // let mut top_of_fabric = Node::new(Some(TOP_OF_FABRIC_LEVEL), id_a);
+        // let mut leaf_node = Node::new(None, id_b);
+        // top_of_fabric.add_link(&leaf_node);
+        // leaf_node.add_link(&top_of_fabric);
 
-        let mut network = Network {
-            nodes: vec![top_of_fabric, leaf_node],
-        };
-        network.run();
+        // let mut network = Network {
+        //     nodes: vec![top_of_fabric, leaf_node],
+        // };
+        // network.run();
 
-        let top_of_fabric = network.get(id_a).unwrap();
-        let leaf_node = network.get(id_b).unwrap();
-        assert_eq!(top_of_fabric.discovered_level, Some(TOP_OF_FABRIC_LEVEL));
-        assert_eq!(leaf_node.discovered_level, Some(LEAF_LEVEL));
+        // let top_of_fabric = network.get(id_a).unwrap();
+        // let leaf_node = network.get(id_b).unwrap();
+        // assert_eq!(top_of_fabric.discovered_level, Some(TOP_OF_FABRIC_LEVEL));
+        // assert_eq!(leaf_node.discovered_level, Some(LEAF_LEVEL));
     }
 }
