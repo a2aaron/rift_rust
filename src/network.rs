@@ -1,15 +1,13 @@
 use std::{
-    collections::HashMap,
     error::Error,
     io,
     net::{Ipv4Addr, Ipv6Addr, SocketAddrV4, UdpSocket},
-    num::NonZeroU32,
 };
 
 use crate::{
-    models::common,
+    models::{common, encoding::ProtocolPacket},
     packet::{self, SecretKeyStore},
-    topology::{GlobalConstants, Interface, Key, NodeDescription, TopologyDescription},
+    topology::{GlobalConstants, Interface, NodeDescription, TopologyDescription},
 };
 
 // 224.0.0.120
@@ -36,13 +34,10 @@ impl Network {
             .map(|node| Node::from_desc(node, &desc.constant))
             .collect::<io::Result<_>>()?;
 
-        let keys: HashMap<NonZeroU32, Key> = desc
-            .authentication_keys
-            .iter()
-            .map(|key| (key.id, key.clone()))
-            .collect();
-        let keys = SecretKeyStore::new(keys);
-        Ok(Network { nodes, keys })
+        Ok(Network {
+            nodes,
+            keys: desc.get_keys(),
+        })
     }
 
     pub fn run(&mut self) -> Result<(), Box<dyn Error>> {

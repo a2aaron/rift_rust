@@ -1,9 +1,11 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::num::{NonZeroU32, NonZeroUsize};
 
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
+
+use crate::packet::SecretKeyStore;
 
 /// A topology description which defines some aspects of the RIFT network, including:
 /// - What nodes exist
@@ -18,13 +20,22 @@ pub struct TopologyDescription {
     #[serde(rename = "const", default)]
     pub constant: GlobalConstants, // spec lies: this is optional
     #[serde(default)]
-    pub authentication_keys: Vec<Key>, // spec lies: this is called authentication_keys, not keys
-    pub shards: Vec<Shard>,
+    authentication_keys: Vec<Key>, // spec lies: this is called authentication_keys, not keys
+    shards: Vec<Shard>,
 }
 
 impl TopologyDescription {
     pub fn get_nodes(&self) -> Vec<&NodeDescription> {
         self.shards.iter().flat_map(|shard| &shard.nodes).collect()
+    }
+
+    pub fn get_keys(&self) -> SecretKeyStore {
+        let keys: HashMap<NonZeroU32, Key> = self
+            .authentication_keys
+            .iter()
+            .map(|key| (key.id, key.clone()))
+            .collect();
+        SecretKeyStore::new(keys)
     }
 }
 
