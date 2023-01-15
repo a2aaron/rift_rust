@@ -1,144 +1,257 @@
 use std::collections::VecDeque;
 
-use crate::models::common::{LevelType, SystemIDType};
+use crate::models::{
+    common::{
+        self, LinkIDType, MTUSizeType, SystemIDType, UDPPortType, ILLEGAL_SYSTEM_I_D, LEAF_LEVEL,
+    },
+    encoding::{self, LIEPacket, PacketHeader, PROTOCOL_MAJOR_VERSION},
+};
 
 /// A Link representing a connection from one Node to another Node. Note that these are physical Links
 /// (that is to say, they are links which are physical present in the topology, but not nessecarily
 /// links which that will be considered to be logically present in the topology later on.)
 /// Note that this struct represents only one direction in a link--the other linked Node also has it's
 /// own Link pointing back to the first Node.
-pub struct LinkFSM {
+pub struct LieStateMachine {
     /// Determines if a link is logically present in the topology. If the LIEState is ThreeWay, then
     /// the link is logically present. Otherwise, it is not.
-    lie_state: LIEState,
-    external_event_queue: VecDeque<LIEEvent>,
-    chained_event_queue: VecDeque<LIEEvent>,
-    /// The system id of the other node in this link.
-    other: SystemIDType,
+    lie_state: LieState,
+    external_event_queue: VecDeque<LieEvent>,
+    chained_event_queue: VecDeque<LieEvent>,
+    /// This node's level, as computed by the ZTP/LIE FSMs.
+    derived_level: Level,
+    /// from spec:  Set of nodes offering HAL VOLs
+    highest_available_level_systems: HALS,
+    // from spec: Highest defined level value seen from all VOLs received.
+    highest_available_level: Level,
+    /// from spec: Highest neighbor level of all the formed ThreeWay adjacencies for the node.
+    highest_adjacency_threeway: Level,
+    /// The system ID of this node.
+    system_id: SystemIDType,
+    /// THe MTU of this node.
+    mtu: MTUSizeType,
+    neighbor: Option<Neighbor>,
 }
 
-impl LinkFSM {
+impl LieStateMachine {
     pub fn process_next_lie_event(&mut self) {
         // fetch an event out of (one of?) the queues and process it.
         todo!()
     }
 
-    fn process_lie_event(
-        &mut self,
-        event: LIEEvent,
-    ) -> (LIEState, &'static [LIEEvent], &'static [fn(&mut LinkFSM)]) {
-        match (self.lie_state, event) {
-            (LIEState::OneWay, LIEEvent::TimerTick) => todo!(),
-            (LIEState::OneWay, LIEEvent::LevelChanged) => todo!(),
-            (LIEState::OneWay, LIEEvent::HALChanged) => todo!(),
-            (LIEState::OneWay, LIEEvent::HATChanged) => todo!(),
-            (LIEState::OneWay, LIEEvent::HALSChanged) => todo!(),
-            (LIEState::OneWay, LIEEvent::LieRcvd) => todo!(),
-            (LIEState::OneWay, LIEEvent::NewNeighbor) => todo!(),
-            (LIEState::OneWay, LIEEvent::ValidReflection) => todo!(),
-            (LIEState::OneWay, LIEEvent::NeighborDroppedReflection) => todo!(),
-            (LIEState::OneWay, LIEEvent::NeighborChangedLevel) => todo!(),
-            (LIEState::OneWay, LIEEvent::NeighborChangedAddress) => todo!(),
-            (LIEState::OneWay, LIEEvent::UnacceptableHeader) => todo!(),
-            (LIEState::OneWay, LIEEvent::MTUMismatch) => todo!(),
-            (LIEState::OneWay, LIEEvent::NeighborChangedMinorFields) => todo!(),
-            (LIEState::OneWay, LIEEvent::HoldtimeExpired) => todo!(),
-            (LIEState::OneWay, LIEEvent::MultipleNeighbors) => todo!(),
-            (LIEState::OneWay, LIEEvent::MultipleNeighborsDone) => todo!(),
-            (LIEState::OneWay, LIEEvent::FloodLeadersChanged) => todo!(),
-            (LIEState::OneWay, LIEEvent::SendLie) => todo!(),
-            (LIEState::OneWay, LIEEvent::UpdateZTPOffer) => todo!(),
-            (LIEState::TwoWay, LIEEvent::TimerTick) => todo!(),
-            (LIEState::TwoWay, LIEEvent::LevelChanged) => todo!(),
-            (LIEState::TwoWay, LIEEvent::HALChanged) => todo!(),
-            (LIEState::TwoWay, LIEEvent::HATChanged) => todo!(),
-            (LIEState::TwoWay, LIEEvent::HALSChanged) => todo!(),
-            (LIEState::TwoWay, LIEEvent::LieRcvd) => todo!(),
-            (LIEState::TwoWay, LIEEvent::NewNeighbor) => todo!(),
-            (LIEState::TwoWay, LIEEvent::ValidReflection) => todo!(),
-            (LIEState::TwoWay, LIEEvent::NeighborDroppedReflection) => todo!(),
-            (LIEState::TwoWay, LIEEvent::NeighborChangedLevel) => todo!(),
-            (LIEState::TwoWay, LIEEvent::NeighborChangedAddress) => todo!(),
-            (LIEState::TwoWay, LIEEvent::UnacceptableHeader) => todo!(),
-            (LIEState::TwoWay, LIEEvent::MTUMismatch) => todo!(),
-            (LIEState::TwoWay, LIEEvent::NeighborChangedMinorFields) => todo!(),
-            (LIEState::TwoWay, LIEEvent::HoldtimeExpired) => todo!(),
-            (LIEState::TwoWay, LIEEvent::MultipleNeighbors) => todo!(),
-            (LIEState::TwoWay, LIEEvent::MultipleNeighborsDone) => todo!(),
-            (LIEState::TwoWay, LIEEvent::FloodLeadersChanged) => todo!(),
-            (LIEState::TwoWay, LIEEvent::SendLie) => todo!(),
-            (LIEState::TwoWay, LIEEvent::UpdateZTPOffer) => todo!(),
-            (LIEState::ThreeWay, LIEEvent::TimerTick) => todo!(),
-            (LIEState::ThreeWay, LIEEvent::LevelChanged) => todo!(),
-            (LIEState::ThreeWay, LIEEvent::HALChanged) => todo!(),
-            (LIEState::ThreeWay, LIEEvent::HATChanged) => todo!(),
-            (LIEState::ThreeWay, LIEEvent::HALSChanged) => todo!(),
-            (LIEState::ThreeWay, LIEEvent::LieRcvd) => todo!(),
-            (LIEState::ThreeWay, LIEEvent::NewNeighbor) => todo!(),
-            (LIEState::ThreeWay, LIEEvent::ValidReflection) => todo!(),
-            (LIEState::ThreeWay, LIEEvent::NeighborDroppedReflection) => todo!(),
-            (LIEState::ThreeWay, LIEEvent::NeighborChangedLevel) => todo!(),
-            (LIEState::ThreeWay, LIEEvent::NeighborChangedAddress) => todo!(),
-            (LIEState::ThreeWay, LIEEvent::UnacceptableHeader) => todo!(),
-            (LIEState::ThreeWay, LIEEvent::MTUMismatch) => todo!(),
-            (LIEState::ThreeWay, LIEEvent::NeighborChangedMinorFields) => todo!(),
-            (LIEState::ThreeWay, LIEEvent::HoldtimeExpired) => todo!(),
-            (LIEState::ThreeWay, LIEEvent::MultipleNeighbors) => todo!(),
-            (LIEState::ThreeWay, LIEEvent::MultipleNeighborsDone) => todo!(),
-            (LIEState::ThreeWay, LIEEvent::FloodLeadersChanged) => todo!(),
-            (LIEState::ThreeWay, LIEEvent::SendLie) => todo!(),
-            (LIEState::ThreeWay, LIEEvent::UpdateZTPOffer) => todo!(),
-            (LIEState::MultipleNeighborsWait, LIEEvent::TimerTick) => todo!(),
-            (LIEState::MultipleNeighborsWait, LIEEvent::LevelChanged) => todo!(),
-            (LIEState::MultipleNeighborsWait, LIEEvent::HALChanged) => todo!(),
-            (LIEState::MultipleNeighborsWait, LIEEvent::HATChanged) => todo!(),
-            (LIEState::MultipleNeighborsWait, LIEEvent::HALSChanged) => todo!(),
-            (LIEState::MultipleNeighborsWait, LIEEvent::LieRcvd) => todo!(),
-            (LIEState::MultipleNeighborsWait, LIEEvent::NewNeighbor) => todo!(),
-            (LIEState::MultipleNeighborsWait, LIEEvent::ValidReflection) => todo!(),
-            (LIEState::MultipleNeighborsWait, LIEEvent::NeighborDroppedReflection) => todo!(),
-            (LIEState::MultipleNeighborsWait, LIEEvent::NeighborChangedLevel) => todo!(),
-            (LIEState::MultipleNeighborsWait, LIEEvent::NeighborChangedAddress) => todo!(),
-            (LIEState::MultipleNeighborsWait, LIEEvent::UnacceptableHeader) => todo!(),
-            (LIEState::MultipleNeighborsWait, LIEEvent::MTUMismatch) => todo!(),
-            (LIEState::MultipleNeighborsWait, LIEEvent::NeighborChangedMinorFields) => todo!(),
-            (LIEState::MultipleNeighborsWait, LIEEvent::HoldtimeExpired) => todo!(),
-            (LIEState::MultipleNeighborsWait, LIEEvent::MultipleNeighbors) => todo!(),
-            (LIEState::MultipleNeighborsWait, LIEEvent::MultipleNeighborsDone) => todo!(),
-            (LIEState::MultipleNeighborsWait, LIEEvent::FloodLeadersChanged) => todo!(),
-            (LIEState::MultipleNeighborsWait, LIEEvent::SendLie) => todo!(),
-            (LIEState::MultipleNeighborsWait, LIEEvent::UpdateZTPOffer) => todo!(),
+    fn process_lie_event(&mut self, event: LieEvent) -> LieState {
+        match self.lie_state {
+            LieState::OneWay => match event {
+                LieEvent::TimerTick => {
+                    self.push(LieEvent::SendLie);
+                    LieState::OneWay
+                }
+                LieEvent::UnacceptableHeader => LieState::OneWay,
+                LieEvent::LevelChanged(new_level) => {
+                    // update level with event value, PUSH SendLie event
+                    self.derived_level = new_level;
+                    self.push(LieEvent::SendLie);
+                    LieState::OneWay
+                }
+                LieEvent::NeighborChangedMinorFields => LieState::OneWay,
+                LieEvent::NeighborChangedLevel => LieState::OneWay,
+                LieEvent::NewNeighbor => {
+                    self.push(LieEvent::SendLie);
+                    LieState::TwoWay
+                }
+                LieEvent::HoldtimeExpired => LieState::OneWay,
+                LieEvent::HALSChanged(new_hals) => {
+                    // store HALS
+                    self.highest_available_level_systems = new_hals;
+                    LieState::OneWay
+                }
+                LieEvent::NeighborChangedAddress => LieState::OneWay,
+                LieEvent::LieRcvd(lie_header, lie_packet) => {
+                    // PROCESS_LIE
+                    self.process_lie_procedure(&lie_header, &lie_packet);
+                    LieState::OneWay
+                }
+                LieEvent::ValidReflection => LieState::ThreeWay,
+                LieEvent::SendLie => {
+                    self.send_lie_procedure(); // SEND_LIE
+                    LieState::OneWay
+                }
+                LieEvent::UpdateZTPOffer => {
+                    todo!(); // send offer to ZTP FSM
+                    LieState::OneWay
+                }
+                LieEvent::HATChanged(new_hat) => {
+                    self.highest_adjacency_threeway = new_hat; // store HAT
+                    LieState::OneWay
+                }
+                LieEvent::MultipleNeighbors => {
+                    todo!(); // start multiple neighbors timer with interval `multiple_neighbors_lie_holdtime_multipler` * `default_lie_holdtime`
+                    LieState::MultipleNeighborsWait
+                }
+                LieEvent::MTUMismatch => LieState::OneWay,
+                LieEvent::FloodLeadersChanged => {
+                    todo!(); // update `you_are_flood_repeater` LIE elements based on flood leader election results
+                    LieState::OneWay
+                }
+                LieEvent::NeighborDroppedReflection => LieState::OneWay,
+                LieEvent::HALChanged(new_hal) => {
+                    self.highest_available_level = new_hal; // store new HAL
+                    LieState::OneWay
+                }
+                // Illegal State Transitions
+                LieEvent::MultipleNeighborsDone => {
+                    unreachable!("This event should only occur in MultipleNeighborsWait.")
+                }
+            },
+            LieState::TwoWay => todo!(),
+            LieState::ThreeWay => todo!(),
+            LieState::MultipleNeighborsWait => todo!(),
         }
     }
 
-    pub fn send_lie_event() {
+    // implements the "PROCESS_LIE" procedure
+    pub fn process_lie_procedure(&mut self, lie_header: &PacketHeader, lie_packet: &LIEPacket) {
+        let lie_level: Level = lie_header.level.into();
+
+        let pushed_events = if lie_header.major_version != PROTOCOL_MAJOR_VERSION
+            || lie_header.sender == self.system_id
+            || lie_header.sender == ILLEGAL_SYSTEM_I_D
+        {
+            // 1. if LIE has major version not equal to this node's *or* system ID equal to this node'ssystem ID or `IllegalSystemID`
+            //    then CLEANUP
+            self.cleanup();
+        } else if lie_packet.link_mtu_size != Some(self.mtu) {
+            // 2. if LIE has non matching MTUs
+            //    then CLEANUP, PUSH UpdateZTPOffer, PUSH MTUMismatch
+            self.cleanup();
+            self.push(LieEvent::UpdateZTPOffer);
+            self.push(LieEvent::MTUMismatch);
+        } else if lie_level.is_undefined()
+            || self.derived_level.is_undefined()
+            || (self.derived_level.is_leaf() && lie_level < self.highest_available_level)
+            || (!lie_level.is_leaf() && lie_level - self.derived_level > 1)
+        {
+            // 3. if LIE has undefined level OR
+            //       this node's level is undefined OR
+            //       this node is a leaf and remote level is lower than HAT OR
+            //       (LIE's level is not leaf AND its difference is more than one from this node's level)
+            //    then CLEANUP, PUSH UpdateZTPOffer, PUSH UnacceptableHeader
+            self.cleanup();
+            self.push(LieEvent::UpdateZTPOffer);
+            self.push(LieEvent::UnacceptableHeader);
+        } else {
+            // 4. PUSH UpdateZTPOffer, construct temporary new neighbor structure with values from LIE,
+            self.push(LieEvent::UpdateZTPOffer);
+            let new_neighbor = Neighbor {
+                name: lie_packet.name,
+                system_id: lie_header.sender,
+                local_link_id: lie_packet.local_id,
+                level: lie_header.level.into(),
+                address: todo!(), // on the udp packet
+                flood_port: lie_packet.flood_port,
+            };
+            // if no current neighbor exists
+            // then set neighbor to new neighbor, PUSH NewNeighbor event, CHECK_THREE_WAY else
+            //   1. if current neighbor system ID differs from LIE's system ID
+            //     then PUSH MultipleNeighbors else
+            //   2. if current neighbor stored level differs from LIE's level
+            //      then PUSH NeighborChangedLevel else
+            //   3. if current neighbor stored IPv4/v6 address differs from LIE's address
+            //      then PUSH NeighborChangedAddress else
+            //   4. if any of neighbor's flood address port, name, local LinkID changed
+            //      then PUSH NeighborChangedMinorFields
+            // 5. CHECK_THREE_WAY (i believe the draft spec here is wrong: This "CHECK_THREE_WAY" should
+            // be at the end of step 4.4, not it's own step as step 5.)
+            if let Some(curr_neighbor) = self.neighbor {
+                if curr_neighbor.system_id != new_neighbor.system_id {
+                    self.push(LieEvent::MultipleNeighbors);
+                } else if curr_neighbor.level != new_neighbor.level {
+                    self.push(LieEvent::NeighborChangedLevel);
+                } else if curr_neighbor.address != new_neighbor.address {
+                    self.push(LieEvent::NeighborChangedAddress);
+                } else if curr_neighbor.flood_port != new_neighbor.flood_port
+                    || curr_neighbor.name != new_neighbor.name
+                    || curr_neighbor.local_link_id != new_neighbor.local_link_id
+                {
+                    self.push(LieEvent::NeighborChangedMinorFields);
+                    self.check_three_way();
+                }
+            } else {
+                // if no current neighbor exists then set neighbor to new neighbor, PUSH NewNeighbor event, CHECK_THREE_WAY
+                self.neighbor = Some(new_neighbor);
+                self.push(LieEvent::NewNeighbor);
+                self.check_three_way();
+            }
+        };
+    }
+
+    // implements the "CHECK_THREE_WAY" procedure
+    // CHECK_THREE_WAY: if current state is OneWay do nothing else
+    // 1. if LIE packet does not contain neighbor
+    //    then if current state is ThreeWay
+    //         then PUSH NeighborDroppedReflection else
+    // 2. if packet reflects this system's ID and local port and state is ThreeWay
+    //    then PUSH event ValidReflection
+    //    else PUSH event MultipleNeighbors
+    pub fn check_three_way(&self) {
         todo!()
+    }
+
+    // implements the "SEND_LIE" procedure.
+    // SEND_LIE:
+    // 1. create and send a new LIE packet reflecting the neighbor if known and valid and
+    // 2. setting the necessary `not_a_ztp_offer` variable if level was derived from last
+    //    known neighbor on this interface and
+    // 3. setting `you_are_not_flood_repeater` to computed value
+    fn send_lie_procedure(&self) {
+        todo!()
+    }
+
+    // implements the "CLEANUP" procedure
+    // CLEANUP: neighbor MUST be reset to unknown
+    pub fn cleanup(&mut self) {
+        self.neighbor = None
+    }
+
+    // implements the "PUSH Event" procedure.
+    // PUSH Event: queues an event to be executed by the FSM upon exit of this action
+    fn push(&mut self, event: LieEvent) {
+        self.chained_event_queue.push_back(event)
     }
 }
 
+struct Neighbor {
+    level: Level,
+    address: (),
+    system_id: SystemIDType,
+    flood_port: UDPPortType,
+    name: Option<String>,
+    local_link_id: LinkIDType,
+}
+
 #[derive(Debug, Clone, Copy)]
-pub enum LIEState {
+pub enum LieState {
     OneWay,
     TwoWay,
     ThreeWay,
     MultipleNeighborsWait,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub enum LIEEvent {
+#[derive(Debug, Clone)]
+pub enum LieEvent {
     /// One second timer tick, i.e. the event is generated for FSM by some external entity once a
     /// second. To be quietly ignored if transition does not exist.
     TimerTick,
     /// Node's level has been changed by ZTP or configuration. This is provided by the ZTP FSM.
-    LevelChanged,
+    LevelChanged(Level),
     /// Best HAL computed by ZTP has changed. This is provided by the ZTP FSM.
-    HALChanged,
+    HALChanged(Level),
     /// HAT computed by ZTP has changed. This is provided by the ZTP FSM.
-    HATChanged,
+    HATChanged(Level),
     /// Set of HAL offering systems computed by ZTP has changed. This is provided by the ZTP FSM.
-    HALSChanged,
+    HALSChanged(HALS),
     /// Received LIE on the interface.
-    LieRcvd,
+    LieRcvd(encoding::PacketHeader, encoding::LIEPacket),
     /// New neighbor seen on the received LIE.
     NewNeighbor,
     /// Received reflection of this node from neighbor, i.e. `neighbor` element in `LiePacket`
@@ -171,6 +284,42 @@ pub enum LIEEvent {
     /// Update this node's ZTP offer. This is sent to the ZTP FSM.
     UpdateZTPOffer,
 }
+
+// TODO: are levels only in 0-24 range? if so, maybe enforce this?
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Level {
+    Undefined,
+    Value(u8),
+}
+
+impl Level {
+    fn is_leaf(&self) -> bool {
+        match self {
+            Level::Undefined => false,
+            Level::Value(value) => *value == LEAF_LEVEL as u8,
+        }
+    }
+
+    fn is_undefined(&self) -> bool {
+        match self {
+            Level::Undefined => true,
+            Level::Value(_) => false,
+        }
+    }
+}
+
+impl From<Option<common::LevelType>> for Level {
+    fn from(value: Option<common::LevelType>) -> Self {
+        match value {
+            Some(level) => Level::Value(level as u8),
+            None => Level::Undefined,
+        }
+    }
+}
+
+// TODO: I have no idea what this will consist of.
+#[derive(Debug, Clone, Copy)]
+struct HALS;
 
 #[cfg(test)]
 mod test {
