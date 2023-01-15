@@ -113,56 +113,86 @@ impl LieStateMachine {
     pub fn process_lie_procedure(&mut self, lie_header: &PacketHeader, lie_packet: &LIEPacket) {
         let lie_level: Level = lie_header.level.into();
 
-        let pushed_events = if lie_header.major_version != PROTOCOL_MAJOR_VERSION
+        // 1. if LIE has major version not equal to this node's *or*
+        //       system ID equal to this node's system IDor `IllegalSystemID`
+        //    then CLEANUP
+        if lie_header.major_version != PROTOCOL_MAJOR_VERSION
             || lie_header.sender == self.system_id
             || lie_header.sender == ILLEGAL_SYSTEM_I_D
         {
-            // 1. if LIE has major version not equal to this node's *or* system ID equal to this node'ssystem ID or `IllegalSystemID`
-            //    then CLEANUP
             self.cleanup();
-        } else if lie_packet.link_mtu_size != Some(self.mtu) {
+            return;
+        }
+
+        if lie_packet.link_mtu_size != Some(self.mtu) {
             // 2. if LIE has non matching MTUs
             //    then CLEANUP, PUSH UpdateZTPOffer, PUSH MTUMismatch
             self.cleanup();
             self.push(LieEvent::UpdateZTPOffer);
             self.push(LieEvent::MTUMismatch);
-        } else if lie_level.is_undefined()
-            || self.derived_level.is_undefined()
-            || (self.derived_level.is_leaf() && lie_level < self.highest_available_level)
-            || (!lie_level.is_leaf() && lie_level - self.derived_level > 1)
-        {
-            // 3. if LIE has undefined level OR
-            //       this node's level is undefined OR
-            //       this node is a leaf and remote level is lower than HAT OR
-            //       (LIE's level is not leaf AND its difference is more than one from this node's level)
-            //    then CLEANUP, PUSH UpdateZTPOffer, PUSH UnacceptableHeader
+            return;
+        }
+
+        // 3. if LIE has undefined level OR
+        //       this node's level is undefined OR
+        //       this node is a leaf and remote level is lower than HAT OR
+        //       (LIE's level is not leaf AND its difference is more than one from this node's level)
+        //    then CLEANUP, PUSH UpdateZTPOffer, PUSH UnacceptableHeader
+        let similar_levels = match (self.derived_level, lie_level) {
+            (_, Level::Undefined) => true,
+            (Level::Undefined, _) => true,
+            (Level::Value(derived_level), Level::Value(lie_level)) => {
+                let this_node_is_leaf = derived_level == LEAF_LEVEL as u8;
+                let remote_lower_than_hat = match self.highest_adjacency_threeway {
+                    // TODO: if our HAT is undefined, do we treat that always "lower" than the remote's level? (aka: always true)
+                    // or not (always false)?
+                    Level::Undefined => true,
+                    Level::Value(hat) => lie_level < hat,
+                };
+
+                let lie_is_not_leaf = lie_level != LEAF_LEVEL as u8;
+                let lie_more_than_one_away = u8::abs_diff(lie_level, derived_level) > 1;
+                (this_node_is_leaf && remote_lower_than_hat)
+                    || (lie_is_not_leaf && lie_more_than_one_away)
+            }
+        };
+        if similar_levels {
             self.cleanup();
             self.push(LieEvent::UpdateZTPOffer);
             self.push(LieEvent::UnacceptableHeader);
-        } else {
-            // 4. PUSH UpdateZTPOffer, construct temporary new neighbor structure with values from LIE,
-            self.push(LieEvent::UpdateZTPOffer);
-            let new_neighbor = Neighbor {
-                name: lie_packet.name,
-                system_id: lie_header.sender,
-                local_link_id: lie_packet.local_id,
-                level: lie_header.level.into(),
-                address: todo!(), // on the udp packet
-                flood_port: lie_packet.flood_port,
-            };
-            // if no current neighbor exists
-            // then set neighbor to new neighbor, PUSH NewNeighbor event, CHECK_THREE_WAY else
-            //   1. if current neighbor system ID differs from LIE's system ID
-            //     then PUSH MultipleNeighbors else
-            //   2. if current neighbor stored level differs from LIE's level
-            //      then PUSH NeighborChangedLevel else
-            //   3. if current neighbor stored IPv4/v6 address differs from LIE's address
-            //      then PUSH NeighborChangedAddress else
-            //   4. if any of neighbor's flood address port, name, local LinkID changed
-            //      then PUSH NeighborChangedMinorFields
-            // 5. CHECK_THREE_WAY (i believe the draft spec here is wrong: This "CHECK_THREE_WAY" should
-            // be at the end of step 4.4, not it's own step as step 5.)
-            if let Some(curr_neighbor) = self.neighbor {
+            return;
+        }
+
+        // 4. PUSH UpdateZTPOffer, construct temporary new neighbor structure with values from LIE,
+        self.push(LieEvent::UpdateZTPOffer);
+        let new_neighbor = Neighbor {
+            name: lie_packet.name.clone(), // TODO: avoid an allocation here?
+            system_id: lie_header.sender,
+            local_link_id: lie_packet.local_id,
+            level: lie_header.level.into(),
+            address: todo!(), // TODO: the address is on the udp packet, which is a bit annoying.
+            flood_port: lie_packet.flood_port,
+        };
+
+        // if no current neighbor exists
+        // then set neighbor to new neighbor, PUSH NewNeighbor event, CHECK_THREE_WAY else
+        //   1. if current neighbor system ID differs from LIE's system ID
+        //     then PUSH MultipleNeighbors else
+        //   2. if current neighbor stored level differs from LIE's level
+        //      then PUSH NeighborChangedLevel else
+        //   3. if current neighbor stored IPv4/v6 address differs from LIE's address
+        //      then PUSH NeighborChangedAddress else
+        //   4. if any of neighbor's flood address port, name, local LinkID changed
+        //      then PUSH NeighborChangedMinorFields
+        // 5. CHECK_THREE_WAY (i believe the draft spec here is wrong: This "CHECK_THREE_WAY" should
+        // be at the end of step 4.4, not it's own step as step 5.)
+        match self.neighbor {
+            None => {
+                self.neighbor = Some(new_neighbor);
+                self.push(LieEvent::NewNeighbor);
+                self.check_three_way();
+            }
+            Some(curr_neighbor) => {
                 if curr_neighbor.system_id != new_neighbor.system_id {
                     self.push(LieEvent::MultipleNeighbors);
                 } else if curr_neighbor.level != new_neighbor.level {
@@ -176,13 +206,8 @@ impl LieStateMachine {
                     self.push(LieEvent::NeighborChangedMinorFields);
                     self.check_three_way();
                 }
-            } else {
-                // if no current neighbor exists then set neighbor to new neighbor, PUSH NewNeighbor event, CHECK_THREE_WAY
-                self.neighbor = Some(new_neighbor);
-                self.push(LieEvent::NewNeighbor);
-                self.check_three_way();
             }
-        };
+        }
     }
 
     // implements the "CHECK_THREE_WAY" procedure
@@ -287,7 +312,7 @@ pub enum LieEvent {
 
 // TODO: are levels only in 0-24 range? if so, maybe enforce this?
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Level {
+pub enum Level {
     Undefined,
     Value(u8),
 }
@@ -319,7 +344,7 @@ impl From<Option<common::LevelType>> for Level {
 
 // TODO: I have no idea what this will consist of.
 #[derive(Debug, Clone, Copy)]
-struct HALS;
+pub struct HALS;
 
 #[cfg(test)]
 mod test {
