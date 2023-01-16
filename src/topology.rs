@@ -5,6 +5,8 @@ use std::num::{NonZeroU32, NonZeroUsize};
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 
+use crate::lie_exchange;
+use crate::models::common::{LEAF_LEVEL, TOP_OF_FABRIC_LEVEL};
 use crate::packet::SecretKeyStore;
 
 /// A topology description which defines some aspects of the RIFT network, including:
@@ -178,6 +180,20 @@ pub enum Level {
     NamedLevel(NamedLevel),
 }
 
+impl From<Level> for lie_exchange::Level {
+    fn from(level: Level) -> Self {
+        match level {
+            Level::Number(number) => lie_exchange::Level::Value(number as u8),
+            Level::NamedLevel(level) => match level {
+                NamedLevel::Undefined => lie_exchange::Level::Undefined,
+                NamedLevel::Leaf => lie_exchange::Level::Value(LEAF_LEVEL as u8),
+                NamedLevel::LeafToLeaf => lie_exchange::Level::Value(LEAF_LEVEL as u8),
+                NamedLevel::TopOfFabric => lie_exchange::Level::Value(TOP_OF_FABRIC_LEVEL as u8),
+            },
+        }
+    }
+}
+
 impl Default for Level {
     fn default() -> Self {
         Level::NamedLevel(NamedLevel::Undefined)
@@ -191,9 +207,6 @@ pub enum NamedLevel {
     Leaf,
     LeafToLeaf,
     TopOfFabric,
-    // spec lies: this is not listed in the spec but is used by two_by_two_by_two_ztp
-    // i do not know what it means.
-    Superspine,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

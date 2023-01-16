@@ -1,11 +1,15 @@
 use std::{
     error::Error,
     io,
-    net::{Ipv4Addr, Ipv6Addr, SocketAddrV4, UdpSocket},
+    net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, UdpSocket},
 };
 
 use crate::{
-    models::{common, encoding::ProtocolPacket},
+    lie_exchange::{Level, LieEvent, LieStateMachine},
+    models::{
+        common,
+        encoding::{PacketContent, ProtocolPacket},
+    },
     packet::{self, Nonce, OuterSecurityEnvelopeHeader, PacketNumber, SecretKeyStore},
     topology::{GlobalConstants, Interface, NodeDescription, TopologyDescription},
 };
@@ -42,11 +46,8 @@ impl Network {
 
     pub fn run(&mut self) -> Result<(), Box<dyn Error>> {
         loop {
-            for node in &self.nodes {
-                for link in &node.links {
-                    let packet = link.recv_packet(&self.keys)?;
-                    println!("{:#?}", packet);
-                }
+            for node in &mut self.nodes {
+                node.step(&self.keys);
             }
         }
     }
@@ -58,19 +59,28 @@ pub struct Node {
 }
 
 impl Node {
-    pub fn from_desc(desc: &NodeDescription, constants: &GlobalConstants) -> io::Result<Node> {
-        let rx_lie_v4 = desc.rx_lie_mcast_address.unwrap_or(
+    pub fn from_desc(node_desc: &NodeDescription, constants: &GlobalConstants) -> io::Result<Node> {
+        let rx_lie_v4 = node_desc.rx_lie_mcast_address.unwrap_or(
             constants
                 .rx_mcast_address
                 .unwrap_or(DEFAULT_LIE_IPV4_MCAST_ADDRESS),
         );
-        let links = desc
+        let links = node_desc
             .interfaces
             .iter()
-            .map(|desc| Link::from_desc(rx_lie_v4, desc))
+            .map(|link_desc| {
+                let configured_level = node_desc.level.into();
+                Link::from_desc(rx_lie_v4, configured_level, link_desc)
+            })
             .collect::<io::Result<_>>()?;
 
         Ok(Node { links })
+    }
+
+    pub fn step(&mut self, key: &SecretKeyStore) {
+        for link in &mut self.links {
+            link.step(key);
+        }
     }
 }
 
@@ -81,11 +91,16 @@ pub struct Link {
     packet_number: PacketNumber,
     weak_nonce_local: Nonce,
     weak_nonce_remote: Nonce,
+    lie_fsm: LieStateMachine,
 }
 
 impl Link {
-    pub fn from_desc(lie_rx_mcast_address: Ipv4Addr, desc: &Interface) -> io::Result<Link> {
-        let rx_lie_port = desc
+    pub fn from_desc(
+        lie_rx_mcast_address: Ipv4Addr,
+        configured_level: Level,
+        link_desc: &Interface,
+    ) -> io::Result<Link> {
+        let rx_lie_port = link_desc
             .rx_lie_port
             .unwrap_or(common::DEFAULT_LIE_UDP_PORT as u16);
 
@@ -96,23 +111,42 @@ impl Link {
         if lie_rx_mcast_address.is_multicast() {
             lie_socket.join_multicast_v4(&lie_rx_mcast_address, &Ipv4Addr::UNSPECIFIED)?;
         }
-        println!("Interface {}: recving on {}", desc.name, addr);
+        println!("Interface {}: recving on {}", link_desc.name, addr);
         Ok(Link {
             lie_socket,
             packet_number: PacketNumber::from(1),
             weak_nonce_local: Nonce::from(1),
             weak_nonce_remote: Nonce::Invalid,
+            lie_fsm: LieStateMachine::new(configured_level),
         })
     }
 
-    pub fn recv_packet(&self, keys: &SecretKeyStore) -> Result<ProtocolPacket, Box<dyn Error>> {
+    pub fn step(&mut self, keys: &SecretKeyStore) {
+        self.lie_fsm.process_external_event();
+        match self.recv_packet(keys) {
+            Ok((packet, address)) => {
+                match packet.content {
+                    PacketContent::Lie(content) => self.lie_fsm.push_external_event(
+                        LieEvent::LieRcvd(address.ip(), packet.header, content),
+                    ),
+                    _ => (),
+                }
+            }
+            Err(err) => println!("Did not recv packet: {}", err),
+        }
+    }
+
+    pub fn recv_packet(
+        &self,
+        keys: &SecretKeyStore,
+    ) -> Result<(ProtocolPacket, SocketAddr), Box<dyn Error>> {
         let mut bytes: Vec<u8> = vec![0; common::DEFAULT_MTU_SIZE as usize];
-        let length = self.lie_socket.recv(&mut bytes)?;
+        let (length, address) = self.lie_socket.recv_from(&mut bytes)?;
         bytes.resize(length, 0u8);
         let packet = packet::parse_and_validate(&bytes, keys)?;
 
         // TODO: set weak_nonce_remote based on packet data?
-        Ok(packet)
+        Ok((packet, address))
     }
 
     pub fn send_packet(&mut self, packet: &ProtocolPacket) -> io::Result<usize> {

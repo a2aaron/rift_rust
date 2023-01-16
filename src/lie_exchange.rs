@@ -1,8 +1,9 @@
-use std::collections::VecDeque;
+use std::{collections::VecDeque, net::IpAddr};
 
 use crate::models::{
     common::{
-        self, LinkIDType, MTUSizeType, SystemIDType, UDPPortType, ILLEGAL_SYSTEM_I_D, LEAF_LEVEL,
+        self, LinkIDType, MTUSizeType, SystemIDType, UDPPortType, DEFAULT_MTU_SIZE,
+        ILLEGAL_SYSTEM_I_D, LEAF_LEVEL,
     },
     encoding::{self, LIEPacket, PacketHeader, PROTOCOL_MAJOR_VERSION},
 };
@@ -28,15 +29,51 @@ pub struct LieStateMachine {
     highest_adjacency_threeway: Level,
     /// The system ID of this node.
     system_id: SystemIDType,
-    /// THe MTU of this node.
+    /// The MTU of this node.
     mtu: MTUSizeType,
     neighbor: Option<Neighbor>,
+    /// The ZTP state machine. Maybe this should go into the Link?
+    ztp_fsm: ZtpStateMachine,
 }
 
 impl LieStateMachine {
-    pub fn process_next_lie_event(&mut self) {
-        // fetch an event out of (one of?) the queues and process it.
-        todo!()
+    pub fn new(configured_level: Level) -> LieStateMachine {
+        LieStateMachine {
+            lie_state: LieState::OneWay,
+            external_event_queue: VecDeque::new(),
+            chained_event_queue: VecDeque::new(),
+            derived_level: configured_level,
+            highest_available_level_systems: HALS,
+            highest_available_level: Level::Undefined,
+            highest_adjacency_threeway: Level::Undefined,
+            system_id: 0,
+            mtu: DEFAULT_MTU_SIZE,
+            neighbor: None,
+            ztp_fsm: ZtpStateMachine,
+        }
+    }
+
+    // Process a single external event, if there exists events in the event queue
+    pub fn process_external_event(&mut self) {
+        assert!(self.chained_event_queue.is_empty());
+        if let Some(event) = self.external_event_queue.pop_front() {
+            println!("processing external event: {}", event.name());
+            let new_state = self.process_lie_event(event);
+            println!("transitioning: {:?} -> {:?}", self.lie_state, new_state);
+            self.lie_state = new_state;
+        }
+
+        // Drain the chained event queue, if an external event caused some events to be pushed.
+        while let Some(event) = self.chained_event_queue.pop_front() {
+            println!("processing chained event: {}", event.name());
+            let new_state = self.process_lie_event(event);
+            println!("transitioning: {:?} -> {:?}", self.lie_state, new_state);
+            self.lie_state = new_state;
+        }
+    }
+
+    pub fn push_external_event(&mut self, event: LieEvent) {
+        self.external_event_queue.push_back(event);
     }
 
     fn process_lie_event(&mut self, event: LieEvent) -> LieState {
@@ -66,9 +103,9 @@ impl LieStateMachine {
                     LieState::OneWay
                 }
                 LieEvent::NeighborChangedAddress => LieState::OneWay,
-                LieEvent::LieRcvd(lie_header, lie_packet) => {
+                LieEvent::LieRcvd(address, lie_header, lie_packet) => {
                     // PROCESS_LIE
-                    self.process_lie_procedure(&lie_header, &lie_packet);
+                    self.process_lie_procedure(address, &lie_header, &lie_packet);
                     LieState::OneWay
                 }
                 LieEvent::ValidReflection => LieState::ThreeWay,
@@ -77,7 +114,7 @@ impl LieStateMachine {
                     LieState::OneWay
                 }
                 LieEvent::UpdateZTPOffer => {
-                    todo!(); // send offer to ZTP FSM
+                    self.ztp_fsm.send_ztp_offer();
                     LieState::OneWay
                 }
                 LieEvent::HATChanged(new_hat) => {
@@ -110,7 +147,12 @@ impl LieStateMachine {
     }
 
     // implements the "PROCESS_LIE" procedure
-    pub fn process_lie_procedure(&mut self, lie_header: &PacketHeader, lie_packet: &LIEPacket) {
+    fn process_lie_procedure(
+        &mut self,
+        address: IpAddr,
+        lie_header: &PacketHeader,
+        lie_packet: &LIEPacket,
+    ) {
         let lie_level: Level = lie_header.level.into();
 
         // 1. if LIE has major version not equal to this node's *or*
@@ -138,7 +180,7 @@ impl LieStateMachine {
         //       this node is a leaf and remote level is lower than HAT OR
         //       (LIE's level is not leaf AND its difference is more than one from this node's level)
         //    then CLEANUP, PUSH UpdateZTPOffer, PUSH UnacceptableHeader
-        let similar_levels = match (self.derived_level, lie_level) {
+        let unacceptable_header = match (self.derived_level, lie_level) {
             (_, Level::Undefined) => true,
             (Level::Undefined, _) => true,
             (Level::Value(derived_level), Level::Value(lie_level)) => {
@@ -156,7 +198,7 @@ impl LieStateMachine {
                     || (lie_is_not_leaf && lie_more_than_one_away)
             }
         };
-        if similar_levels {
+        if unacceptable_header {
             self.cleanup();
             self.push(LieEvent::UpdateZTPOffer);
             self.push(LieEvent::UnacceptableHeader);
@@ -170,7 +212,7 @@ impl LieStateMachine {
             system_id: lie_header.sender,
             local_link_id: lie_packet.local_id,
             level: lie_header.level.into(),
-            address: todo!(), // TODO: the address is on the udp packet, which is a bit annoying.
+            address,
             flood_port: lie_packet.flood_port,
         };
 
@@ -186,7 +228,7 @@ impl LieStateMachine {
         //      then PUSH NeighborChangedMinorFields
         // 5. CHECK_THREE_WAY (i believe the draft spec here is wrong: This "CHECK_THREE_WAY" should
         // be at the end of step 4.4, not it's own step as step 5.)
-        match self.neighbor {
+        match &self.neighbor {
             None => {
                 self.neighbor = Some(new_neighbor);
                 self.push(LieEvent::NewNeighbor);
@@ -218,7 +260,10 @@ impl LieStateMachine {
     // 2. if packet reflects this system's ID and local port and state is ThreeWay
     //    then PUSH event ValidReflection
     //    else PUSH event MultipleNeighbors
-    pub fn check_three_way(&self) {
+    fn check_three_way(&self) {
+        if self.lie_state == LieState::OneWay {
+            return;
+        }
         todo!()
     }
 
@@ -234,7 +279,7 @@ impl LieStateMachine {
 
     // implements the "CLEANUP" procedure
     // CLEANUP: neighbor MUST be reset to unknown
-    pub fn cleanup(&mut self) {
+    fn cleanup(&mut self) {
         self.neighbor = None
     }
 
@@ -247,14 +292,14 @@ impl LieStateMachine {
 
 struct Neighbor {
     level: Level,
-    address: (),
+    address: IpAddr,
     system_id: SystemIDType,
     flood_port: UDPPortType,
     name: Option<String>,
     local_link_id: LinkIDType,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LieState {
     OneWay,
     TwoWay,
@@ -276,7 +321,7 @@ pub enum LieEvent {
     /// Set of HAL offering systems computed by ZTP has changed. This is provided by the ZTP FSM.
     HALSChanged(HALS),
     /// Received LIE on the interface.
-    LieRcvd(encoding::PacketHeader, encoding::LIEPacket),
+    LieRcvd(IpAddr, encoding::PacketHeader, encoding::LIEPacket),
     /// New neighbor seen on the received LIE.
     NewNeighbor,
     /// Received reflection of this node from neighbor, i.e. `neighbor` element in `LiePacket`
@@ -308,6 +353,33 @@ pub enum LieEvent {
     SendLie,
     /// Update this node's ZTP offer. This is sent to the ZTP FSM.
     UpdateZTPOffer,
+}
+
+impl LieEvent {
+    fn name(&self) -> &str {
+        match self {
+            LieEvent::TimerTick => "TimerTick",
+            LieEvent::LevelChanged(..) => "LevelChanged",
+            LieEvent::HALChanged(..) => "HALChanged",
+            LieEvent::HATChanged(..) => "HATChanged",
+            LieEvent::HALSChanged(..) => "HALSChanged",
+            LieEvent::LieRcvd(..) => "LieRcvd",
+            LieEvent::NewNeighbor => "NewNeighbor",
+            LieEvent::ValidReflection => "ValidReflection",
+            LieEvent::NeighborDroppedReflection => "NeighborDroppedReflection",
+            LieEvent::NeighborChangedLevel => "NeighborChangedLevel",
+            LieEvent::NeighborChangedAddress => "NeighborChangedAddress",
+            LieEvent::UnacceptableHeader => "UnacceptableHeader",
+            LieEvent::MTUMismatch => "MTUMismatch",
+            LieEvent::NeighborChangedMinorFields => "NeighborChangedMinorFields",
+            LieEvent::HoldtimeExpired => "HoldtimeExpired",
+            LieEvent::MultipleNeighbors => "MultipleNeighbors",
+            LieEvent::MultipleNeighborsDone => "MultipleNeighborsDone",
+            LieEvent::FloodLeadersChanged => "FloodLeadersChanged",
+            LieEvent::SendLie => "SendLie",
+            LieEvent::UpdateZTPOffer => "UpdateZTPOffer",
+        }
+    }
 }
 
 // TODO: are levels only in 0-24 range? if so, maybe enforce this?
@@ -345,6 +417,14 @@ impl From<Option<common::LevelType>> for Level {
 // TODO: I have no idea what this will consist of.
 #[derive(Debug, Clone, Copy)]
 pub struct HALS;
+
+struct ZtpStateMachine;
+
+impl ZtpStateMachine {
+    fn send_ztp_offer(&self) {
+        println!("TODO: send_ztp_offer");
+    }
+}
 
 #[cfg(test)]
 mod test {
