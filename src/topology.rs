@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use sha2::Digest;
 
 use crate::lie_exchange;
-use crate::models::common::{LEAF_LEVEL, TOP_OF_FABRIC_LEVEL};
+use crate::models::common::{self, LEAF_LEVEL, TOP_OF_FABRIC_LEVEL};
 use crate::packet::SecretKeyStore;
 
 /// A topology description which defines some aspects of the RIFT network, including:
@@ -209,8 +209,14 @@ pub enum NamedLevel {
     TopOfFabric,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
 pub struct SystemID(u64);
+
+impl SystemID {
+    pub fn get(&self) -> common::SystemIDType {
+        self.0 as common::SystemIDType
+    }
+}
 
 #[derive(Debug, Default, Serialize, Deserialize)]
 pub enum Validation {

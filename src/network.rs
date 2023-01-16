@@ -5,13 +5,13 @@ use std::{
 };
 
 use crate::{
-    lie_exchange::{Level, LieEvent, LieStateMachine},
+    lie_exchange::{self, LieEvent, LieStateMachine},
     models::{
         common,
         encoding::{PacketContent, ProtocolPacket},
     },
     packet::{self, Nonce, OuterSecurityEnvelopeHeader, PacketNumber, SecretKeyStore},
-    topology::{GlobalConstants, Interface, NodeDescription, TopologyDescription},
+    topology::{GlobalConstants, Interface, NodeDescription, SystemID, TopologyDescription},
 };
 
 // 224.0.0.120
@@ -68,9 +68,15 @@ impl Node {
         let links = node_desc
             .interfaces
             .iter()
-            .map(|link_desc| {
-                let configured_level = node_desc.level.into();
-                Link::from_desc(rx_lie_v4, configured_level, link_desc)
+            .enumerate()
+            .map(|(local_link_id, link_desc)| {
+                let node_info = NodeInfo {
+                    name: Some(node_desc.name.clone()),
+                    configured_level: node_desc.level.into(),
+                    lie_addr: rx_lie_v4.into(),
+                    system_id: node_desc.system_id,
+                };
+                Link::from_desc(local_link_id as u32, node_info, link_desc)
             })
             .collect::<io::Result<_>>()?;
 
@@ -85,45 +91,61 @@ impl Node {
 }
 
 pub struct Link {
-    lie_socket: UdpSocket,
-    // TODO: the packet numbers are "per adjacency, per packet", so there should probably be 4 of these
-    // however it also says the packet numbers are optional, so w/e
-    packet_number: PacketNumber,
-    weak_nonce_local: Nonce,
-    weak_nonce_remote: Nonce,
+    link_socket: LinkSocket,
     lie_fsm: LieStateMachine,
+    node_info: NodeInfo,
+    link_info: LinkInfo,
 }
 
 impl Link {
     pub fn from_desc(
-        lie_rx_mcast_address: Ipv4Addr,
-        configured_level: Level,
+        local_link_id: u32,
+        node_info: NodeInfo,
         link_desc: &Interface,
     ) -> io::Result<Link> {
         let rx_lie_port = link_desc
             .rx_lie_port
             .unwrap_or(common::DEFAULT_LIE_UDP_PORT as u16);
+        let tx_lie_port = link_desc
+            .tx_lie_port
+            .unwrap_or(common::DEFAULT_LIE_UDP_PORT as u16);
 
         // todo: ipv6
-        let addr = SocketAddrV4::new(lie_rx_mcast_address, rx_lie_port);
-        let lie_socket = UdpSocket::bind(addr)?;
+        let rx_addr = SocketAddrV4::new(node_info.lie_addr, rx_lie_port);
+        let lie_socket = UdpSocket::bind(rx_addr)?;
 
-        if lie_rx_mcast_address.is_multicast() {
-            lie_socket.join_multicast_v4(&lie_rx_mcast_address, &Ipv4Addr::UNSPECIFIED)?;
+        if node_info.lie_addr.is_multicast() {
+            lie_socket.join_multicast_v4(&node_info.lie_addr, &Ipv4Addr::UNSPECIFIED)?;
         }
-        println!("Interface {}: recving on {}", link_desc.name, addr);
+
+        println!("Interface {}: recving on {}", link_desc.name, rx_addr);
+
+        let link_info = LinkInfo {
+            local_link_id,
+            rx_lie_port,
+            tx_lie_port,
+        };
+
         Ok(Link {
-            lie_socket,
-            packet_number: PacketNumber::from(1),
-            weak_nonce_local: Nonce::from(1),
-            weak_nonce_remote: Nonce::Invalid,
-            lie_fsm: LieStateMachine::new(configured_level),
+            link_socket: LinkSocket {
+                lie_socket,
+                packet_number: PacketNumber::from(1),
+                weak_nonce_local: Nonce::from(1),
+                weak_nonce_remote: Nonce::Invalid,
+            },
+            lie_fsm: LieStateMachine::new(node_info.configured_level),
+            node_info,
+            link_info,
         })
     }
 
     pub fn step(&mut self, keys: &SecretKeyStore) {
-        self.lie_fsm.process_external_event();
-        match self.recv_packet(keys) {
+        self.lie_fsm.process_external_event(
+            &mut self.link_socket,
+            &self.node_info,
+            &self.link_info,
+        );
+        match self.link_socket.recv_packet(keys) {
             Ok((packet, address)) => {
                 match packet.content {
                     PacketContent::Lie(content) => self.lie_fsm.push_external_event(
@@ -135,7 +157,19 @@ impl Link {
             Err(err) => println!("Did not recv packet: {}", err),
         }
     }
+}
 
+// Wrapper struct for a UdpSocket
+pub struct LinkSocket {
+    lie_socket: UdpSocket,
+    // TODO: the packet numbers are "per adjacency, per packet", so there should probably be 4 of these
+    // however it also says the packet numbers are optional, so w/e
+    packet_number: PacketNumber,
+    weak_nonce_local: Nonce,
+    weak_nonce_remote: Nonce,
+}
+
+impl LinkSocket {
     pub fn recv_packet(
         &self,
         keys: &SecretKeyStore,
@@ -149,7 +183,9 @@ impl Link {
         Ok((packet, address))
     }
 
-    pub fn send_packet(&mut self, packet: &ProtocolPacket) -> io::Result<usize> {
+    // TODO: THIS SUCKS (move tx_lie_port into this struct instead of passing it in. maybe also put LinkInfo into this struct)
+    // TODO: maybe definitely add the address here?
+    pub fn send_packet(&mut self, packet: &ProtocolPacket, tx_lie_port: u16) -> io::Result<usize> {
         let outer_header = OuterSecurityEnvelopeHeader::new(
             self.weak_nonce_local,
             self.weak_nonce_remote,
@@ -157,7 +193,15 @@ impl Link {
         );
         let buf = packet::serialize(outer_header, packet);
 
-        let result = self.lie_socket.send(&buf);
+        // TODO: allow the rx addr to be customizable? nothing in rift python seems to take advantage of this though
+        let tx_addr = SocketAddrV4::new(DEFAULT_LIE_IPV4_MCAST_ADDRESS, tx_lie_port);
+
+        // TODO: aarrrggg this probably is stupid!!! do this once at socket creation time???
+        // TODO: this might not be nessecary.
+        self.lie_socket
+            .join_multicast_v4(&DEFAULT_LIE_IPV4_MCAST_ADDRESS, &Ipv4Addr::UNSPECIFIED)?;
+
+        let result = self.lie_socket.send_to(&buf, tx_addr);
 
         // TODO: These probably need to be incremented in different locations.
         self.packet_number = self.packet_number + 1;
@@ -165,6 +209,20 @@ impl Link {
 
         result
     }
+}
+
+pub struct LinkInfo {
+    pub local_link_id: u32,
+    pub rx_lie_port: u16,
+    pub tx_lie_port: u16,
+}
+
+pub struct NodeInfo {
+    /// Node or adjacency name.
+    pub name: Option<String>,
+    pub configured_level: lie_exchange::Level,
+    pub lie_addr: Ipv4Addr,
+    pub system_id: SystemID,
 }
 
 pub enum Passivity {

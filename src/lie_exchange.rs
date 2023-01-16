@@ -1,11 +1,17 @@
 use std::{collections::VecDeque, net::IpAddr};
 
-use crate::models::{
-    common::{
-        self, LinkIDType, MTUSizeType, SystemIDType, UDPPortType, DEFAULT_MTU_SIZE,
-        ILLEGAL_SYSTEM_I_D, LEAF_LEVEL,
+use crate::{
+    models::{
+        common::{
+            self, LinkIDType, MTUSizeType, SystemIDType, UDPPortType, DEFAULT_LIE_HOLDTIME,
+            DEFAULT_MTU_SIZE, ILLEGAL_SYSTEM_I_D, LEAF_LEVEL,
+        },
+        encoding::{
+            self, LIEPacket, PacketHeader, ProtocolPacket, PROTOCOL_MAJOR_VERSION,
+            PROTOCOL_MINOR_VERSION,
+        },
     },
-    encoding::{self, LIEPacket, PacketHeader, PROTOCOL_MAJOR_VERSION},
+    network::{LinkInfo, LinkSocket, NodeInfo},
 };
 
 /// A Link representing a connection from one Node to another Node. Note that these are physical Links
@@ -54,7 +60,12 @@ impl LieStateMachine {
     }
 
     // Process a single external event, if there exists events in the event queue
-    pub fn process_external_event(&mut self) {
+    pub fn process_external_event(
+        &mut self,
+        socket: &mut LinkSocket,
+        node_info: &NodeInfo,
+        link_info: &LinkInfo,
+    ) {
         assert!(self.chained_event_queue.is_empty());
         if let Some(event) = self.external_event_queue.pop_front() {
             println!(
@@ -62,7 +73,7 @@ impl LieStateMachine {
                 event.name(),
                 self.lie_state
             );
-            let new_state = self.process_lie_event(event);
+            let new_state = self.process_lie_event(event, socket, node_info, link_info);
             if new_state != self.lie_state {
                 println!("transitioning: {:?} -> {:?}", self.lie_state, new_state);
                 self.lie_state = new_state;
@@ -76,7 +87,7 @@ impl LieStateMachine {
                 event.name(),
                 self.lie_state
             );
-            let new_state = self.process_lie_event(event);
+            let new_state = self.process_lie_event(event, socket, node_info, link_info);
             if new_state != self.lie_state {
                 println!("transitioning: {:?} -> {:?}", self.lie_state, new_state);
                 self.lie_state = new_state;
@@ -85,10 +96,17 @@ impl LieStateMachine {
     }
 
     pub fn push_external_event(&mut self, event: LieEvent) {
+        println!("Pushing external event {:?}", event);
         self.external_event_queue.push_back(event);
     }
 
-    fn process_lie_event(&mut self, event: LieEvent) -> LieState {
+    fn process_lie_event(
+        &mut self,
+        event: LieEvent,
+        socket: &mut LinkSocket,
+        node_info: &NodeInfo,
+        link_info: &LinkInfo,
+    ) -> LieState {
         match self.lie_state {
             LieState::OneWay => match event {
                 LieEvent::TimerTick => {
@@ -120,7 +138,7 @@ impl LieStateMachine {
                 }
                 LieEvent::ValidReflection => LieState::ThreeWay,
                 LieEvent::SendLie => {
-                    self.send_lie_procedure(); // SEND_LIE
+                    self.send_lie_procedure(socket, node_info, link_info); // SEND_LIE
                     LieState::OneWay
                 }
                 LieEvent::UpdateZTPOffer => {
@@ -165,7 +183,7 @@ impl LieStateMachine {
                 LieEvent::UnacceptableHeader => LieState::OneWay,
                 LieEvent::ValidReflection => LieState::ThreeWay,
                 LieEvent::SendLie => {
-                    self.send_lie_procedure(); // SEND_LIE
+                    self.send_lie_procedure(socket, node_info, link_info); // SEND_LIE
                     LieState::TwoWay
                 }
                 LieEvent::HATChanged(hat) => {
@@ -187,7 +205,7 @@ impl LieStateMachine {
                     LieState::TwoWay
                 }
                 LieEvent::NewNeighbor => {
-                    self.send_lie_procedure(); // PUSH SendLie event
+                    self.send_lie_procedure(socket, node_info, link_info); // PUSH SendLie event
                     LieState::MultipleNeighborsWait
                 }
                 LieEvent::TimerTick => {
@@ -350,8 +368,63 @@ impl LieStateMachine {
     // 2. setting the necessary `not_a_ztp_offer` variable if level was derived from last
     //    known neighbor on this interface and
     // 3. setting `you_are_not_flood_repeater` to computed value
-    fn send_lie_procedure(&self) {
-        todo!()
+    fn send_lie_procedure(
+        &self,
+        socket: &mut LinkSocket,
+        node_info: &NodeInfo,
+        link_info: &LinkInfo,
+    ) {
+        let neighbor = match &self.neighbor {
+            Some(neighbor) => Some(encoding::Neighbor {
+                originator: node_info.system_id.get(),
+                remote_id: neighbor.local_link_id, // TODO: should this be the system id?
+            }),
+            None => None,
+        };
+
+        // TODO: fill in these values with real data, instead of None
+        let lie_packet = LIEPacket {
+            name: None,
+            local_id: link_info.local_link_id as common::LinkIDType,
+            flood_port: link_info.rx_lie_port as common::UDPPortType,
+            link_mtu_size: None,
+            link_bandwidth: None,
+            neighbor,
+            pod: None,
+            node_capabilities: encoding::NodeCapabilities {
+                protocol_minor_version: PROTOCOL_MINOR_VERSION,
+                flood_reduction: None,
+                hierarchy_indications: None,
+                auto_evpn_support: None,
+                auto_flood_reflection_support: None,
+            },
+            link_capabilities: None,
+            holdtime: DEFAULT_LIE_HOLDTIME,
+            label: None,
+            not_a_ztp_offer: None,
+            you_are_flood_repeater: None,
+            you_are_sending_too_quickly: None,
+            instance_name: None,
+            fabric_id: None,
+            auto_evpn_version: None,
+            auto_flood_reflection_version: None,
+            auto_flood_reflection_cluster_id: None,
+        };
+
+        let header = PacketHeader {
+            major_version: PROTOCOL_MAJOR_VERSION,
+            minor_version: PROTOCOL_MINOR_VERSION,
+            sender: node_info.system_id.get(),
+            level: self.derived_level.into(),
+        };
+
+        let packet = ProtocolPacket {
+            header,
+            content: encoding::PacketContent::Lie(lie_packet),
+        };
+
+        // TODO: Handle packet send failure for real.
+        socket.send_packet(&packet, link_info.tx_lie_port).unwrap();
     }
 
     // implements the "CLEANUP" procedure
@@ -492,6 +565,15 @@ impl From<Option<common::LevelType>> for Level {
     }
 }
 
+impl From<Level> for Option<common::LevelType> {
+    fn from(value: Level) -> Self {
+        match value {
+            Level::Undefined => None,
+            Level::Value(value) => Some(value as common::LevelType),
+        }
+    }
+}
+
 // TODO: I have no idea what this will consist of.
 #[derive(Debug, Clone, Copy)]
 pub struct HALS;
@@ -506,7 +588,6 @@ impl ZtpStateMachine {
 
 #[cfg(test)]
 mod test {
-    use crate::models::common::{LEAF_LEVEL, TOP_OF_FABRIC_LEVEL};
 
     #[test]
     #[ignore = "not yet implemented"]
