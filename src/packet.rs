@@ -1,4 +1,10 @@
-use std::{borrow::Cow, collections::HashMap, io::Write, num::NonZeroU32, ops::Range};
+use std::{
+    borrow::Cow,
+    collections::HashMap,
+    io::Write,
+    num::{NonZeroU16, NonZeroU32},
+    ops::Range,
+};
 
 use thrift::{
     protocol::{TBinaryInputProtocol, TSerializable},
@@ -7,7 +13,7 @@ use thrift::{
 
 use crate::{
     models::{
-        common::{INVALID_KEY_VALUE_KEY, UNDEFINED_PACKET_NUMBER},
+        common::{INVALID_KEY_VALUE_KEY, UNDEFINED_NONCE, UNDEFINED_PACKET_NUMBER},
         encoding::{ProtocolPacket, PROTOCOL_MAJOR_VERSION},
     },
     topology::Key,
@@ -68,8 +74,8 @@ pub struct OuterSecurityEnvelopeHeader<'a> {
     pub major_version: u8,
     pub outer_key_id: KeyID, // this is actually only 8 bits long
     pub security_fingerprint: Cow<'a, [u8]>,
-    pub weak_nonce_local: u16,
-    pub weak_nonce_remote: u16,
+    pub weak_nonce_local: Nonce,
+    pub weak_nonce_remote: Nonce,
     pub remaining_tie_lifetime: Option<u32>,
 }
 
@@ -77,8 +83,8 @@ impl<'a> OuterSecurityEnvelopeHeader<'a> {
     pub fn seal(
         key: Option<Key>,
         payload: &[u8],
-        weak_nonce_local: u16,
-        weak_nonce_remote: u16,
+        weak_nonce_local: Nonce,
+        weak_nonce_remote: Nonce,
         packet_number: PacketNumber,
         tie_header: Option<(TIEOriginSecurityEnvelopeHeader, u32)>,
     ) -> OuterSecurityEnvelopeHeader<'static> {
@@ -161,8 +167,8 @@ impl<'a> OuterSecurityEnvelopeHeader<'a> {
             major_version,
             outer_key_id,
             security_fingerprint: Cow::Borrowed(security_fingerprint),
-            weak_nonce_local,
-            weak_nonce_remote,
+            weak_nonce_local: weak_nonce_local.into(),
+            weak_nonce_remote: weak_nonce_remote.into(),
             remaining_tie_lifetime,
         };
 
@@ -326,6 +332,49 @@ impl From<PacketNumber> for u16 {
         match value {
             PacketNumber::Undefined => UNDEFINED_PACKET_NUMBER as u16,
             PacketNumber::Value(value) => value,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Nonce {
+    Invalid,
+    Valid(NonZeroU16),
+}
+
+impl Nonce {
+    fn to_be_bytes(&self) -> [u8; 2] {
+        match self {
+            Nonce::Invalid => [0, 0],
+            Nonce::Valid(value) => value.get().to_be_bytes(),
+        }
+    }
+}
+
+impl std::ops::Add<u16> for Nonce {
+    type Output = Self;
+
+    fn add(self, rhs: u16) -> Self::Output {
+        match self {
+            Nonce::Invalid => Nonce::Invalid,
+            Nonce::Valid(value) => {
+                let added = if value.get() + rhs == UNDEFINED_NONCE as u16 {
+                    value.get() + rhs + 1
+                } else {
+                    value.get() + rhs
+                };
+                Nonce::Valid(NonZeroU16::new(added).unwrap())
+            }
+        }
+    }
+}
+
+impl From<u16> for Nonce {
+    fn from(value: u16) -> Self {
+        if value == UNDEFINED_NONCE as u16 {
+            Nonce::Invalid
+        } else {
+            Nonce::Valid(NonZeroU16::new(value).unwrap())
         }
     }
 }
@@ -521,8 +570,8 @@ mod test {
             major_version: 0x06,
             outer_key_id: KeyID::Invalid,
             security_fingerprint: Cow::Owned(vec![]),
-            weak_nonce_local: 0x7e5c,
-            weak_nonce_remote: 0x39c0,
+            weak_nonce_local: 0x7e5c.into(),
+            weak_nonce_remote: 0x39c0.into(),
             remaining_tie_lifetime: Some(0x00093a80),
         };
 
@@ -632,8 +681,8 @@ mod test {
                 0xe0, 0xb2, 0xf5, 0xb9, 0xd4, 0xc8, 0x98, 0xce, 0xc3, 0x89, 0xf1, 0xf7, 0x6d, 0x9b,
                 0x5e, 0xc9, 0x38, 0x80, 0xd6, 0xbc, 0xd1, 0x40,
             ]),
-            weak_nonce_local: 0x5519,
-            weak_nonce_remote: 0x4cb9,
+            weak_nonce_local: 0x5519.into(),
+            weak_nonce_remote: 0x4cb9.into(),
             remaining_tie_lifetime: Some(0x00093a80),
         };
 
