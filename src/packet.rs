@@ -13,7 +13,7 @@ use crate::{
     topology::Key,
 };
 
-pub fn serialize(packet: &ProtocolPacket) -> Vec<u8> {
+pub fn serialize(_packet: &ProtocolPacket) -> Vec<u8> {
     todo!()
 }
 
@@ -74,42 +74,44 @@ pub struct OuterSecurityEnvelopeHeader<'a> {
 }
 
 impl<'a> OuterSecurityEnvelopeHeader<'a> {
-    pub fn reseal(
-        self,
-        key: Key,
+    pub fn seal(
+        key: Option<Key>,
         payload: &[u8],
         weak_nonce_local: u16,
         weak_nonce_remote: u16,
         packet_number: PacketNumber,
         tie_header: Option<(TIEOriginSecurityEnvelopeHeader, u32)>,
     ) -> OuterSecurityEnvelopeHeader<'static> {
-        let (fingerprint, remaining_tie_lifetime) = match tie_header {
-            Some((tie_header, lifetime)) => {
-                let fingerprint = key.compute_fingerprint(&[
+        let fingerprint = if let Some(key) = &key {
+            match &tie_header {
+                Some((tie_header, lifetime)) => key.compute_fingerprint(&[
                     &weak_nonce_local.to_be_bytes(),
                     &weak_nonce_remote.to_be_bytes(),
                     &lifetime.to_be_bytes(),
                     &tie_header.first_four_bytes(),
                     &tie_header.security_fingerprint,
                     payload,
-                ]);
-                (fingerprint, Some(lifetime))
-            }
-            None => {
-                let fingerprint = key.compute_fingerprint(&[
+                ]),
+                None => key.compute_fingerprint(&[
                     &weak_nonce_local.to_be_bytes(),
                     &weak_nonce_remote.to_be_bytes(),
                     &0xFFFF_FFFFu32.to_be_bytes(), // Lifetime value is all ones when the Origin TIE Header is not present
                     payload,
-                ]);
-                (fingerprint, None)
+                ]),
             }
+        } else {
+            vec![]
+        };
+
+        let remaining_tie_lifetime = match tie_header {
+            Some((_, lifetime)) => Some(lifetime),
+            None => None,
         };
 
         OuterSecurityEnvelopeHeader {
             packet_number,
             major_version: PROTOCOL_MAJOR_VERSION as u8,
-            outer_key_id: key.id.into(),
+            outer_key_id: key.into(),
             security_fingerprint: Cow::Owned(fingerprint),
             weak_nonce_local,
             weak_nonce_remote,
@@ -219,10 +221,14 @@ pub struct TIEOriginSecurityEnvelopeHeader<'a> {
 }
 
 impl<'a> TIEOriginSecurityEnvelopeHeader<'a> {
-    pub fn sealing(key: Key, payload: &[u8]) -> TIEOriginSecurityEnvelopeHeader {
-        let fingerprint = key.compute_fingerprint(&[payload]);
+    pub fn seal(key: Option<Key>, payload: &[u8]) -> TIEOriginSecurityEnvelopeHeader {
+        let fingerprint = match &key {
+            Some(key) => key.compute_fingerprint(&[payload]),
+            None => vec![],
+        };
+
         TIEOriginSecurityEnvelopeHeader {
-            tie_origin_key_id: key.id.into(),
+            tie_origin_key_id: key.into(),
             security_fingerprint: Cow::Owned(fingerprint),
         }
     }
@@ -355,6 +361,21 @@ impl SecretKeyStore {
 pub enum KeyID {
     Invalid,
     Valid(NonZeroU32),
+}
+
+impl From<Key> for KeyID {
+    fn from(key: Key) -> Self {
+        KeyID::Valid(key.id)
+    }
+}
+
+impl From<Option<Key>> for KeyID {
+    fn from(key: Option<Key>) -> Self {
+        match key {
+            Some(key) => KeyID::Valid(key.id),
+            None => KeyID::Invalid,
+        }
+    }
 }
 
 impl From<u8> for KeyID {
