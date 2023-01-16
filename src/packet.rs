@@ -7,8 +7,8 @@ use std::{
 };
 
 use thrift::{
-    protocol::{TBinaryInputProtocol, TSerializable},
-    transport::ReadHalf,
+    protocol::{TBinaryInputProtocol, TBinaryOutputProtocol, TSerializable},
+    transport::{ReadHalf, WriteHalf},
 };
 
 use crate::{
@@ -19,8 +19,25 @@ use crate::{
     topology::Key,
 };
 
-pub fn serialize(_packet: &ProtocolPacket) -> Vec<u8> {
-    todo!()
+pub fn serialize(packet: &ProtocolPacket) -> Vec<u8> {
+    let mut packet_payload = vec![];
+    let mut binary_protocol = TBinaryOutputProtocol::new(WriteHalf::new(&mut packet_payload), true);
+    packet.write_to_out_protocol(&mut binary_protocol);
+
+    // TODO: We should supply actual values to the header here.
+    let outer_header = OuterSecurityEnvelopeHeader::seal(
+        None,
+        &packet_payload,
+        Nonce::Invalid,
+        Nonce::Invalid,
+        PacketNumber::Undefined,
+        None,
+    );
+
+    let mut outer_header_payload = vec![];
+    outer_header.write(&mut outer_header_payload).unwrap();
+    outer_header_payload.extend(packet_payload);
+    outer_header_payload
 }
 
 // Parse a ProtocolPacket contained in a security envelope.
