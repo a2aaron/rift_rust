@@ -13,6 +13,10 @@ use crate::{
     topology::Key,
 };
 
+pub fn serialize(packet: &ProtocolPacket) -> Vec<u8> {
+    todo!()
+}
+
 // Parse a ProtocolPacket contained in a security envelope.
 // The returned tuple consists of three things. First is the header of the outer security envelope.
 // If a TIE Origin security envelope present, that is also returned. Finally, the unconsumed

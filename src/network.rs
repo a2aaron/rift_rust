@@ -43,8 +43,10 @@ impl Network {
     pub fn run(&mut self) -> Result<(), Box<dyn Error>> {
         loop {
             for node in &self.nodes {
-                let packet = node.recv_packet(&self.keys)?;
-                println!("{:#?}", packet);
+                for link in &node.links {
+                    let packet = link.recv_packet(&self.keys)?;
+                    println!("{:#?}", packet);
+                }
             }
         }
     }
@@ -70,18 +72,6 @@ impl Node {
 
         Ok(Node { links })
     }
-
-    pub fn packet_send(&mut self, _packet: &[u8]) -> io::Result<usize> {
-        todo!()
-    }
-
-    pub fn recv_packet(&self, keys: &SecretKeyStore) -> Result<ProtocolPacket, Box<dyn Error>> {
-        let mut bytes: Vec<u8> = vec![0; common::DEFAULT_MTU_SIZE as usize];
-        let length = self.links[0].lie_socket.recv(&mut bytes)?;
-        bytes.resize(length, 0u8);
-        let packet = packet::parse_and_validate(&bytes, keys)?;
-        Ok(packet)
-    }
 }
 
 pub struct Link {
@@ -103,6 +93,19 @@ impl Link {
         }
         println!("Interface {}: recving on {}", desc.name, addr);
         Ok(Link { lie_socket })
+    }
+
+    pub fn recv_packet(&self, keys: &SecretKeyStore) -> Result<ProtocolPacket, Box<dyn Error>> {
+        let mut bytes: Vec<u8> = vec![0; common::DEFAULT_MTU_SIZE as usize];
+        let length = self.lie_socket.recv(&mut bytes)?;
+        bytes.resize(length, 0u8);
+        let packet = packet::parse_and_validate(&bytes, keys)?;
+        Ok(packet)
+    }
+
+    pub fn send_packet(&mut self, packet: &ProtocolPacket) -> io::Result<usize> {
+        let buf = packet::serialize(packet);
+        self.lie_socket.send(&buf)
     }
 }
 
