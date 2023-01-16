@@ -361,6 +361,23 @@ impl From<PacketNumber> for u16 {
     }
 }
 
+impl std::ops::Add<u16> for PacketNumber {
+    type Output = Self;
+
+    fn add(self, rhs: u16) -> Self::Output {
+        match self {
+            PacketNumber::Undefined => PacketNumber::Undefined,
+            PacketNumber::Value(value) => {
+                let mut new_value = value.wrapping_add(rhs);
+                if new_value == UNDEFINED_PACKET_NUMBER as u16 {
+                    new_value = new_value.wrapping_add(1)
+                }
+                new_value.into()
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Nonce {
     Invalid,
@@ -383,12 +400,11 @@ impl std::ops::Add<u16> for Nonce {
         match self {
             Nonce::Invalid => Nonce::Invalid,
             Nonce::Valid(value) => {
-                let added = if value.get() + rhs == UNDEFINED_NONCE as u16 {
-                    value.get() + rhs + 1
-                } else {
-                    value.get() + rhs
-                };
-                Nonce::Valid(NonZeroU16::new(added).unwrap())
+                let mut new_value = value.get().wrapping_add(rhs);
+                if new_value == UNDEFINED_NONCE as u16 {
+                    new_value = new_value.wrapping_add(1)
+                }
+                new_value.into()
             }
         }
     }

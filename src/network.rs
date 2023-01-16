@@ -110,6 +110,8 @@ impl Link {
         let length = self.lie_socket.recv(&mut bytes)?;
         bytes.resize(length, 0u8);
         let packet = packet::parse_and_validate(&bytes, keys)?;
+
+        // TODO: set weak_nonce_remote based on packet data?
         Ok(packet)
     }
 
@@ -121,7 +123,13 @@ impl Link {
         );
         let buf = packet::serialize(outer_header, packet);
 
-        self.lie_socket.send(&buf)
+        let result = self.lie_socket.send(&buf);
+
+        // TODO: These probably need to be incremented in different locations.
+        self.packet_number = self.packet_number + 1;
+        self.weak_nonce_local = self.weak_nonce_local + 1;
+
+        result
     }
 }
 
