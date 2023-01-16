@@ -43,4 +43,10 @@ Another way to phrase this question: Where does the "else" at the end of step #4
 
 Suppose that no current neighbor exists, does this mean that the "CHECK_THREE_WAY" procedure would occur twice? 
 
+- In step 3. for `PROCESS_LIE`, how should one implement "remote level is lower than HAT" if the HAT is currently undefined. Does undefined level count as lower than all other levels? 
+
 - The ZTP specific terminology should be defined sooner, since terms such as HAL, HAT, and HALS appear earlier than Section 4.2.7.1. Alternatively, please include a link to the definition when these terms are introduced.
+
+
+# Rift Python
+- two_by_two_by_two_ztp.yaml has `level: superspine`. However, this does not appear to be a real named level value, and attempting to get rift-python to parse the file results in an error.
