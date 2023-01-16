@@ -57,18 +57,30 @@ impl LieStateMachine {
     pub fn process_external_event(&mut self) {
         assert!(self.chained_event_queue.is_empty());
         if let Some(event) = self.external_event_queue.pop_front() {
-            println!("processing external event: {}", event.name());
+            println!(
+                "processing external event: {} (in {:?})",
+                event.name(),
+                self.lie_state
+            );
             let new_state = self.process_lie_event(event);
-            println!("transitioning: {:?} -> {:?}", self.lie_state, new_state);
-            self.lie_state = new_state;
+            if new_state != self.lie_state {
+                println!("transitioning: {:?} -> {:?}", self.lie_state, new_state);
+                self.lie_state = new_state;
+            }
         }
 
         // Drain the chained event queue, if an external event caused some events to be pushed.
         while let Some(event) = self.chained_event_queue.pop_front() {
-            println!("processing chained event: {}", event.name());
+            println!(
+                "processing chained event: {} (in {:?})",
+                event.name(),
+                self.lie_state
+            );
             let new_state = self.process_lie_event(event);
-            println!("transitioning: {:?} -> {:?}", self.lie_state, new_state);
-            self.lie_state = new_state;
+            if new_state != self.lie_state {
+                println!("transitioning: {:?} -> {:?}", self.lie_state, new_state);
+                self.lie_state = new_state;
+            }
         }
     }
 
@@ -93,19 +105,17 @@ impl LieStateMachine {
                 LieEvent::NeighborChangedMinorFields => LieState::OneWay,
                 LieEvent::NeighborChangedLevel => LieState::OneWay,
                 LieEvent::NewNeighbor => {
-                    self.push(LieEvent::SendLie);
+                    self.push(LieEvent::SendLie); // PUSH SendLie
                     LieState::TwoWay
                 }
                 LieEvent::HoldtimeExpired => LieState::OneWay,
                 LieEvent::HALSChanged(new_hals) => {
-                    // store HALS
-                    self.highest_available_level_systems = new_hals;
+                    self.highest_available_level_systems = new_hals; // store HALS
                     LieState::OneWay
                 }
                 LieEvent::NeighborChangedAddress => LieState::OneWay,
                 LieEvent::LieRcvd(address, lie_header, lie_packet) => {
-                    // PROCESS_LIE
-                    self.process_lie_procedure(address, &lie_header, &lie_packet);
+                    self.process_lie_procedure(address, &lie_header, &lie_packet); // PROCESS_LIE
                     LieState::OneWay
                 }
                 LieEvent::ValidReflection => LieState::ThreeWay,
@@ -140,7 +150,74 @@ impl LieStateMachine {
                     unreachable!("This event should only occur in MultipleNeighborsWait.")
                 }
             },
-            LieState::TwoWay => todo!(),
+            LieState::TwoWay => match event {
+                LieEvent::NeighborChangedAddress => LieState::OneWay,
+                LieEvent::LieRcvd(address, lie_header, lie_packet) => {
+                    self.process_lie_procedure(address, &lie_header, &lie_packet); // PROCESS_LIE
+                    LieState::TwoWay
+                }
+                LieEvent::UpdateZTPOffer => {
+                    self.ztp_fsm.send_ztp_offer(); // send offer to ZTP FSM
+                    LieState::TwoWay
+                }
+                LieEvent::HoldtimeExpired => LieState::OneWay,
+                LieEvent::MTUMismatch => LieState::OneWay,
+                LieEvent::UnacceptableHeader => LieState::OneWay,
+                LieEvent::ValidReflection => LieState::ThreeWay,
+                LieEvent::SendLie => {
+                    self.send_lie_procedure(); // SEND_LIE
+                    LieState::TwoWay
+                }
+                LieEvent::HATChanged(hat) => {
+                    self.highest_adjacency_threeway = hat; // store HAT
+                    LieState::TwoWay
+                }
+                LieEvent::HALChanged(hal) => {
+                    self.highest_available_level = hal; // store new HAL
+                    LieState::TwoWay
+                }
+                LieEvent::LevelChanged(level) => {
+                    // update level with event value
+                    self.derived_level = level;
+                    LieState::TwoWay
+                }
+                LieEvent::FloodLeadersChanged => {
+                    // update `you_are_flood_repeater` LIE elements based on flood leader election results
+                    todo!();
+                    LieState::TwoWay
+                }
+                LieEvent::NewNeighbor => {
+                    self.send_lie_procedure(); // PUSH SendLie event
+                    LieState::MultipleNeighborsWait
+                }
+                LieEvent::TimerTick => {
+                    // PUSH SendLie event, if last valid LIE was received more than `holdtime` ago
+                    // as advertised by neighbor then PUSH HoldtimeExpired event
+                    todo!();
+                    LieState::TwoWay
+                }
+                LieEvent::NeighborChangedLevel => LieState::OneWay,
+                LieEvent::MultipleNeighbors => {
+                    // start multiple neighbors timer with interval
+                    // `multiple_neighbors_lie_holdtime_multipler` * `default_lie_holdtime`
+                    todo!();
+                    LieState::MultipleNeighborsWait
+                }
+                LieEvent::HALSChanged(hals) => {
+                    self.highest_available_level_systems = hals; // store HALS
+                    LieState::TwoWay
+                }
+                // Illegal State Transitions
+                LieEvent::NeighborDroppedReflection => {
+                    unreachable!("This event should only occur in OneWay.")
+                }
+                LieEvent::NeighborChangedMinorFields => {
+                    unreachable!("This event should only occur in OneWay.")
+                }
+                LieEvent::MultipleNeighborsDone => {
+                    unreachable!("This event should only occur in MultipleNeighborsWait.")
+                }
+            },
             LieState::ThreeWay => todo!(),
             LieState::MultipleNeighborsWait => todo!(),
         }
@@ -286,6 +363,7 @@ impl LieStateMachine {
     // implements the "PUSH Event" procedure.
     // PUSH Event: queues an event to be executed by the FSM upon exit of this action
     fn push(&mut self, event: LieEvent) {
+        println!("\tPUSH {:?}", event);
         self.chained_event_queue.push_back(event)
     }
 }
