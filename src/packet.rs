@@ -4,6 +4,7 @@ use std::{
     io::Write,
     num::{NonZeroU16, NonZeroU32},
     ops::Range,
+    vec,
 };
 
 use thrift::{
@@ -19,20 +20,16 @@ use crate::{
     topology::Key,
 };
 
-pub fn serialize(packet: &ProtocolPacket) -> Vec<u8> {
+pub fn serialize(
+    mut outer_header: OuterSecurityEnvelopeHeader,
+    packet: &ProtocolPacket,
+) -> Vec<u8> {
     let mut packet_payload = vec![];
     let mut binary_protocol = TBinaryOutputProtocol::new(WriteHalf::new(&mut packet_payload), true);
-    packet.write_to_out_protocol(&mut binary_protocol);
+    packet.write_to_out_protocol(&mut binary_protocol).unwrap();
 
-    // TODO: We should supply actual values to the header here.
-    let outer_header = OuterSecurityEnvelopeHeader::seal(
-        None,
-        &packet_payload,
-        Nonce::Invalid,
-        Nonce::Invalid,
-        PacketNumber::Undefined,
-        None,
-    );
+    // TODO: provide actual values for the key + TIE headers
+    outer_header.seal(None, &packet_payload, None);
 
     let mut outer_header_payload = vec![];
     outer_header.write(&mut outer_header_payload).unwrap();
@@ -97,27 +94,28 @@ pub struct OuterSecurityEnvelopeHeader<'a> {
 }
 
 impl<'a> OuterSecurityEnvelopeHeader<'a> {
+    /// Seal the OuterSecurityEnvelopeHeader with the given payload and key. This computes a valid
+    /// signature for the fingerprint. If a TIE Origin header is provided, it is included with the
+    /// payload.i
     pub fn seal(
+        &mut self,
         key: Option<Key>,
         payload: &[u8],
-        weak_nonce_local: Nonce,
-        weak_nonce_remote: Nonce,
-        packet_number: PacketNumber,
         tie_header: Option<(TIEOriginSecurityEnvelopeHeader, u32)>,
-    ) -> OuterSecurityEnvelopeHeader<'static> {
+    ) {
         let fingerprint = if let Some(key) = &key {
             match &tie_header {
                 Some((tie_header, lifetime)) => key.compute_fingerprint(&[
-                    &weak_nonce_local.to_be_bytes(),
-                    &weak_nonce_remote.to_be_bytes(),
+                    &self.weak_nonce_local.to_be_bytes(),
+                    &self.weak_nonce_remote.to_be_bytes(),
                     &lifetime.to_be_bytes(),
                     &tie_header.first_four_bytes(),
                     &tie_header.security_fingerprint,
                     payload,
                 ]),
                 None => key.compute_fingerprint(&[
-                    &weak_nonce_local.to_be_bytes(),
-                    &weak_nonce_remote.to_be_bytes(),
+                    &self.weak_nonce_local.to_be_bytes(),
+                    &self.weak_nonce_remote.to_be_bytes(),
                     &0xFFFF_FFFFu32.to_be_bytes(), // Lifetime value is all ones when the Origin TIE Header is not present
                     payload,
                 ]),
@@ -131,14 +129,24 @@ impl<'a> OuterSecurityEnvelopeHeader<'a> {
             None => None,
         };
 
+        self.remaining_tie_lifetime = remaining_tie_lifetime;
+        self.security_fingerprint = fingerprint.into();
+    }
+
+    /// Create a new OuterSecurityEnvelopeHeader that does not have a valid fingerprint yet.
+    pub fn new(
+        weak_nonce_local: Nonce,
+        weak_nonce_remote: Nonce,
+        packet_number: PacketNumber,
+    ) -> OuterSecurityEnvelopeHeader<'static> {
         OuterSecurityEnvelopeHeader {
             packet_number,
             major_version: PROTOCOL_MAJOR_VERSION as u8,
-            outer_key_id: key.into(),
-            security_fingerprint: Cow::Owned(fingerprint),
+            outer_key_id: KeyID::Invalid,
+            security_fingerprint: Cow::Owned(vec![]),
             weak_nonce_local,
             weak_nonce_remote,
-            remaining_tie_lifetime,
+            remaining_tie_lifetime: None,
         }
     }
 

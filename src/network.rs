@@ -6,7 +6,7 @@ use std::{
 
 use crate::{
     models::{common, encoding::ProtocolPacket},
-    packet::{self, SecretKeyStore},
+    packet::{self, Nonce, OuterSecurityEnvelopeHeader, PacketNumber, SecretKeyStore},
     topology::{GlobalConstants, Interface, NodeDescription, TopologyDescription},
 };
 
@@ -76,6 +76,11 @@ impl Node {
 
 pub struct Link {
     lie_socket: UdpSocket,
+    // TODO: the packet numbers are "per adjacency, per packet", so there should probably be 4 of these
+    // however it also says the packet numbers are optional, so w/e
+    packet_number: PacketNumber,
+    weak_nonce_local: Nonce,
+    weak_nonce_remote: Nonce,
 }
 
 impl Link {
@@ -92,7 +97,12 @@ impl Link {
             lie_socket.join_multicast_v4(&lie_rx_mcast_address, &Ipv4Addr::UNSPECIFIED)?;
         }
         println!("Interface {}: recving on {}", desc.name, addr);
-        Ok(Link { lie_socket })
+        Ok(Link {
+            lie_socket,
+            packet_number: PacketNumber::from(1),
+            weak_nonce_local: Nonce::from(1),
+            weak_nonce_remote: Nonce::Invalid,
+        })
     }
 
     pub fn recv_packet(&self, keys: &SecretKeyStore) -> Result<ProtocolPacket, Box<dyn Error>> {
@@ -104,7 +114,13 @@ impl Link {
     }
 
     pub fn send_packet(&mut self, packet: &ProtocolPacket) -> io::Result<usize> {
-        let buf = packet::serialize(packet);
+        let outer_header = OuterSecurityEnvelopeHeader::new(
+            self.weak_nonce_local,
+            self.weak_nonce_remote,
+            self.packet_number,
+        );
+        let buf = packet::serialize(outer_header, packet);
+
         self.lie_socket.send(&buf)
     }
 }
