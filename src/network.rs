@@ -44,10 +44,10 @@ impl Network {
         })
     }
 
-    pub fn run(&mut self) -> Result<(), Box<dyn Error>> {
+    pub fn run(&mut self) -> io::Result<()> {
         loop {
             for node in &mut self.nodes {
-                node.step(&self.keys);
+                node.step(&self.keys)?;
             }
         }
     }
@@ -83,10 +83,11 @@ impl Node {
         Ok(Node { links })
     }
 
-    pub fn step(&mut self, key: &SecretKeyStore) {
+    pub fn step(&mut self, key: &SecretKeyStore) -> io::Result<()> {
         for link in &mut self.links {
-            link.step(key);
+            link.step(key)?;
         }
+        Ok(())
     }
 }
 
@@ -120,9 +121,9 @@ impl Link {
         })
     }
 
-    pub fn step(&mut self, keys: &SecretKeyStore) {
+    pub fn step(&mut self, keys: &SecretKeyStore) -> io::Result<()> {
         self.lie_fsm
-            .process_external_event(&mut self.link_socket, &self.node_info);
+            .process_external_event(&mut self.link_socket, &self.node_info)?;
         match self.link_socket.recv_packet(keys) {
             Ok((packet, address)) => {
                 match packet.content {
@@ -132,8 +133,9 @@ impl Link {
                     _ => (),
                 }
             }
-            Err(err) => println!("Did not recv packet: {}", err),
+            Err(err) => println!("Could not recv packet: {}", err),
         }
+        Ok(())
     }
 }
 
