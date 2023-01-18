@@ -11,13 +11,8 @@ use crate::{
         encoding::{PacketContent, ProtocolPacket},
     },
     packet::{self, Nonce, OuterSecurityEnvelopeHeader, PacketNumber, SecretKeyStore},
-    topology::{GlobalConstants, Interface, NodeDescription, SystemID, TopologyDescription},
+    topology::{NodeDescription, SystemID, TopologyDescription},
 };
-
-// 224.0.0.120
-const DEFAULT_LIE_IPV4_MCAST_ADDRESS: Ipv4Addr = Ipv4Addr::new(224, 0, 0, 120);
-// FF02::A1F7
-const DEFAULT_LIE_IPV6_MCAST_ADDRESS: Ipv6Addr = Ipv6Addr::new(0xFF02, 0, 0, 0, 0, 0, 0, 0xA1F7);
 
 /// Represents a network of nodes
 pub struct Network {
@@ -35,7 +30,7 @@ impl Network {
                 Passivity::NonPassiveOnly => !node.passive,
                 Passivity::Both => true,
             })
-            .map(|node| Node::from_desc(node, &desc.constant))
+            .map(|node_desc| Node::from_desc(node_desc))
             .collect::<io::Result<_>>()?;
 
         Ok(Network {
@@ -59,12 +54,7 @@ pub struct Node {
 }
 
 impl Node {
-    pub fn from_desc(node_desc: &NodeDescription, constants: &GlobalConstants) -> io::Result<Node> {
-        let rx_lie_v4 = node_desc.rx_lie_mcast_address.unwrap_or(
-            constants
-                .rx_mcast_address
-                .unwrap_or(DEFAULT_LIE_IPV4_MCAST_ADDRESS),
-        );
+    pub fn from_desc(node_desc: &NodeDescription) -> io::Result<Node> {
         let links = node_desc
             .interfaces
             .iter()
@@ -73,10 +63,15 @@ impl Node {
                 let node_info = NodeInfo {
                     name: Some(node_desc.name.clone()),
                     configured_level: node_desc.level.into(),
-                    lie_addr: rx_lie_v4.into(),
                     system_id: node_desc.system_id,
                 };
-                Link::from_desc(local_link_id as u32, node_info, link_desc)
+                Link::from_desc(
+                    local_link_id as u32,
+                    node_info,
+                    link_desc.name.clone(),
+                    link_desc.lie_rx_addr(),
+                    link_desc.lie_tx_addr(),
+                )
             })
             .collect::<io::Result<_>>()?;
 
@@ -101,21 +96,12 @@ impl Link {
     pub fn from_desc(
         local_link_id: u32,
         node_info: NodeInfo,
-        link_desc: &Interface,
+        link_name: String,
+        lie_rx_addr: SocketAddr,
+        lie_tx_addr: SocketAddr,
     ) -> io::Result<Link> {
-        let rx_lie_port = link_desc
-            .rx_lie_port
-            .unwrap_or(common::DEFAULT_LIE_UDP_PORT as u16);
-        let tx_lie_port = link_desc
-            .tx_lie_port
-            .unwrap_or(common::DEFAULT_LIE_UDP_PORT as u16);
-
-        // todo: ipv6
-        let rx_addr = SocketAddrV4::new(node_info.lie_addr, rx_lie_port).into();
-        let tx_addr = SocketAddrV4::new(node_info.lie_addr, tx_lie_port).into();
-
         Ok(Link {
-            link_socket: LinkSocket::new(link_desc.name.clone(), local_link_id, rx_addr, tx_addr)?,
+            link_socket: LinkSocket::new(link_name, local_link_id, lie_rx_addr, lie_tx_addr)?,
             lie_fsm: LieStateMachine::new(node_info.configured_level),
             node_info,
         })
@@ -233,7 +219,6 @@ pub struct NodeInfo {
     /// Node or adjacency name.
     pub name: Option<String>,
     pub configured_level: lie_exchange::Level,
-    pub lie_addr: Ipv4Addr,
     pub system_id: SystemID,
 }
 

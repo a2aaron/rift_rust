@@ -1,13 +1,20 @@
 use std::collections::{HashMap, HashSet};
-use std::net::{Ipv4Addr, Ipv6Addr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::num::{NonZeroU32, NonZeroUsize};
 
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
 
 use crate::lie_exchange;
-use crate::models::common::{self, LEAF_LEVEL, TOP_OF_FABRIC_LEVEL};
+use crate::models::common::{
+    self, DEFAULT_LIE_UDP_PORT, DEFAULT_TIE_UDP_FLOOD_PORT, LEAF_LEVEL, TOP_OF_FABRIC_LEVEL,
+};
 use crate::packet::SecretKeyStore;
+
+// 224.0.0.120
+const DEFAULT_LIE_IPV4_MCAST_ADDRESS: Ipv4Addr = Ipv4Addr::new(224, 0, 0, 120);
+// FF02::A1F7
+const DEFAULT_LIE_IPV6_MCAST_ADDRESS: Ipv6Addr = Ipv6Addr::new(0xFF02, 0, 0, 0, 0, 0, 0, 0xA1F7);
 
 /// A topology description which defines some aspects of the RIFT network, including:
 /// - What nodes exist
@@ -27,6 +34,46 @@ pub struct TopologyDescription {
 }
 
 impl TopologyDescription {
+    pub fn finalize(&mut self) {
+        let mut map = HashMap::new();
+        for node in &self.get_nodes() {
+            let addrs = node.get_addrs();
+            for addr in addrs {
+                let result = map.insert(addr.port(), addr);
+                if let Some(old_addr) = result {
+                    println!(
+                        "Overwriting IP address associated with port {}: {} -> {}",
+                        addr.port(),
+                        old_addr.ip(),
+                        addr.ip()
+                    )
+                }
+            }
+        }
+        println!("{:?}", map);
+        for shard in &mut self.shards {
+            for node in &mut shard.nodes {
+                for interface in &mut node.interfaces {
+                    let lie_rx_port = interface.rx_lie_port.unwrap_or(DEFAULT_LIE_UDP_PORT as u16);
+                    let lie_tx_port = interface.tx_lie_port.unwrap_or(DEFAULT_LIE_UDP_PORT as u16);
+                    let tie_rx_port = interface
+                        .rx_tie_port
+                        .unwrap_or(DEFAULT_TIE_UDP_FLOOD_PORT as u16);
+
+                    // TODO: should this be rx_lie_port or some other value?
+                    let tie_tx_port = interface
+                        .rx_lie_port
+                        .unwrap_or(DEFAULT_TIE_UDP_FLOOD_PORT as u16);
+
+                    interface.lie_rx_addr = map.get(&lie_rx_port).copied();
+                    interface.lie_tx_addr = map.get(&lie_tx_port).copied();
+                    interface.tie_rx_addr = map.get(&tie_rx_port).copied();
+                    interface.tie_tx_addr = map.get(&tie_tx_port).copied();
+                }
+            }
+        }
+    }
+
     pub fn get_nodes(&self) -> Vec<&NodeDescription> {
         self.shards.iter().flat_map(|shard| &shard.nodes).collect()
     }
@@ -154,14 +201,44 @@ pub struct NodeDescription {
     pub v6prefixes: Vec<V6Prefix>,
 }
 
+impl NodeDescription {
+    fn get_addrs(&self) -> Vec<SocketAddr> {
+        let mut link_addrs = vec![];
+        for interface in &self.interfaces {
+            if let Some(rx_lie_port) = interface.rx_lie_port.or(self.rx_lie_port) {
+                let v4_addr = self.rx_lie_mcast_address.map(IpAddr::V4);
+                let v6_addr = self.rx_lie_v6_mcast_address.map(IpAddr::V6);
+                let addr: IpAddr = v4_addr
+                    .or(v6_addr)
+                    .unwrap_or(DEFAULT_LIE_IPV4_MCAST_ADDRESS.into());
+
+                let lie_rx_addr = SocketAddr::from((addr, rx_lie_port));
+                link_addrs.push(lie_rx_addr);
+            }
+
+            if let Some(rx_tie_port) = interface.rx_tie_port {
+                let v4_addr = self.rx_lie_mcast_address.map(IpAddr::V4);
+                let v6_addr = self.rx_lie_v6_mcast_address.map(IpAddr::V6);
+                let addr: IpAddr = v4_addr
+                    .or(v6_addr)
+                    .unwrap_or(DEFAULT_LIE_IPV4_MCAST_ADDRESS.into());
+                let tie_rx_addr = SocketAddr::from((addr, rx_tie_port));
+                link_addrs.push(tie_rx_addr);
+            }
+        }
+
+        link_addrs
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Interface {
     pub name: String,
     pub bandwidth: Option<usize>,
     pub metric: Option<NonZeroUsize>,
-    pub tx_lie_port: Option<u16>,
-    pub rx_lie_port: Option<u16>,
-    pub rx_tie_port: Option<u16>,
+    tx_lie_port: Option<u16>,
+    rx_lie_port: Option<u16>,
+    rx_tie_port: Option<u16>,
     #[serde(default = "default_false")]
     pub advertise_subnet: bool,
     pub active_key: Option<u8>,
@@ -169,6 +246,29 @@ pub struct Interface {
     pub accept_keys: HashSet<u8>,
     #[serde(default)]
     pub link_validation: Validation,
+    #[serde(skip)]
+    lie_tx_addr: Option<SocketAddr>,
+    #[serde(skip)]
+    lie_rx_addr: Option<SocketAddr>,
+    #[serde(skip)]
+    tie_tx_addr: Option<SocketAddr>,
+    #[serde(skip)]
+    tie_rx_addr: Option<SocketAddr>,
+}
+
+impl Interface {
+    pub fn lie_tx_addr(&self) -> SocketAddr {
+        self.lie_tx_addr.unwrap()
+    }
+    pub fn lie_rx_addr(&self) -> SocketAddr {
+        self.lie_rx_addr.unwrap()
+    }
+    pub fn tie_tx_addr(&self) -> SocketAddr {
+        self.tie_tx_addr.unwrap()
+    }
+    pub fn tie_rx_addr(&self) -> SocketAddr {
+        self.tie_rx_addr.unwrap()
+    }
 }
 
 // TODO: I don't like `NamedLevel` being distinct, but I can't figure out how to do this otherwise

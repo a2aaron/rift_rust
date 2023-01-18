@@ -3,8 +3,8 @@ use std::{collections::VecDeque, io, net::IpAddr};
 use crate::{
     models::{
         common::{
-            self, LinkIDType, MTUSizeType, SystemIDType, UDPPortType, DEFAULT_LIE_HOLDTIME,
-            DEFAULT_MTU_SIZE, ILLEGAL_SYSTEM_I_D, LEAF_LEVEL,
+            self, LinkIDType, MTUSizeType, SystemIDType, UDPPortType, DEFAULT_BANDWIDTH,
+            DEFAULT_LIE_HOLDTIME, DEFAULT_MTU_SIZE, ILLEGAL_SYSTEM_I_D, LEAF_LEVEL,
         },
         encoding::{
             self, LIEPacket, PacketHeader, ProtocolPacket, PROTOCOL_MAJOR_VERSION,
@@ -377,13 +377,20 @@ impl LieStateMachine {
             None => None,
         };
 
+        let header = PacketHeader {
+            major_version: PROTOCOL_MAJOR_VERSION,
+            minor_version: PROTOCOL_MINOR_VERSION,
+            sender: node_info.system_id.get(),
+            level: self.derived_level.into(),
+        };
+
         // TODO: fill in these values with real data, instead of None
         let lie_packet = LIEPacket {
             name: node_info.name.clone(),
             local_id: socket.local_link_id as common::LinkIDType,
             flood_port: socket.lie_rx_addr.port() as common::UDPPortType,
-            link_mtu_size: None,
-            link_bandwidth: None,
+            link_mtu_size: Some(DEFAULT_MTU_SIZE),
+            link_bandwidth: Some(DEFAULT_BANDWIDTH),
             neighbor,
             pod: None,
             node_capabilities: encoding::NodeCapabilities {
@@ -404,13 +411,6 @@ impl LieStateMachine {
             auto_evpn_version: None,
             auto_flood_reflection_version: None,
             auto_flood_reflection_cluster_id: None,
-        };
-
-        let header = PacketHeader {
-            major_version: PROTOCOL_MAJOR_VERSION,
-            minor_version: PROTOCOL_MINOR_VERSION,
-            sender: node_info.system_id.get(),
-            level: self.derived_level.into(),
         };
 
         let packet = ProtocolPacket {

@@ -30,8 +30,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     };
 
     let topology = std::fs::read_to_string(args.topology)?;
-    let topology: TopologyDescription = serde_yaml::from_str(&topology)?;
-    println!("{:#?}", topology);
+    let topology = {
+        let mut topology: TopologyDescription = serde_yaml::from_str(&topology)?;
+        topology.finalize();
+        topology
+    };
+    // println!("{:#?}", topology);
 
     let mut network = Network::from_desc(&topology, passivity)?;
     network.run()?;
