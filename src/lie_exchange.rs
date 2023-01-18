@@ -11,7 +11,7 @@ use crate::{
             PROTOCOL_MINOR_VERSION,
         },
     },
-    network::{LinkInfo, LinkSocket, NodeInfo},
+    network::{LinkSocket, NodeInfo},
 };
 
 /// A Link representing a connection from one Node to another Node. Note that these are physical Links
@@ -60,12 +60,7 @@ impl LieStateMachine {
     }
 
     // Process a single external event, if there exists events in the event queue
-    pub fn process_external_event(
-        &mut self,
-        socket: &mut LinkSocket,
-        node_info: &NodeInfo,
-        link_info: &LinkInfo,
-    ) {
+    pub fn process_external_event(&mut self, socket: &mut LinkSocket, node_info: &NodeInfo) {
         assert!(self.chained_event_queue.is_empty());
         if let Some(event) = self.external_event_queue.pop_front() {
             println!(
@@ -73,7 +68,7 @@ impl LieStateMachine {
                 event.name(),
                 self.lie_state
             );
-            let new_state = self.process_lie_event(event, socket, node_info, link_info);
+            let new_state = self.process_lie_event(event, socket, node_info);
             if new_state != self.lie_state {
                 println!("transitioning: {:?} -> {:?}", self.lie_state, new_state);
                 self.lie_state = new_state;
@@ -87,7 +82,7 @@ impl LieStateMachine {
                 event.name(),
                 self.lie_state
             );
-            let new_state = self.process_lie_event(event, socket, node_info, link_info);
+            let new_state = self.process_lie_event(event, socket, node_info);
             if new_state != self.lie_state {
                 println!("transitioning: {:?} -> {:?}", self.lie_state, new_state);
                 self.lie_state = new_state;
@@ -96,7 +91,7 @@ impl LieStateMachine {
     }
 
     pub fn push_external_event(&mut self, event: LieEvent) {
-        println!("Pushing external event {:?}", event);
+        println!("Pushing external event {}", event.name());
         self.external_event_queue.push_back(event);
     }
 
@@ -105,7 +100,6 @@ impl LieStateMachine {
         event: LieEvent,
         socket: &mut LinkSocket,
         node_info: &NodeInfo,
-        link_info: &LinkInfo,
     ) -> LieState {
         match self.lie_state {
             LieState::OneWay => match event {
@@ -138,7 +132,7 @@ impl LieStateMachine {
                 }
                 LieEvent::ValidReflection => LieState::ThreeWay,
                 LieEvent::SendLie => {
-                    self.send_lie_procedure(socket, node_info, link_info); // SEND_LIE
+                    self.send_lie_procedure(socket, node_info); // SEND_LIE
                     LieState::OneWay
                 }
                 LieEvent::UpdateZTPOffer => {
@@ -183,7 +177,7 @@ impl LieStateMachine {
                 LieEvent::UnacceptableHeader => LieState::OneWay,
                 LieEvent::ValidReflection => LieState::ThreeWay,
                 LieEvent::SendLie => {
-                    self.send_lie_procedure(socket, node_info, link_info); // SEND_LIE
+                    self.send_lie_procedure(socket, node_info); // SEND_LIE
                     LieState::TwoWay
                 }
                 LieEvent::HATChanged(hat) => {
@@ -205,7 +199,7 @@ impl LieStateMachine {
                     LieState::TwoWay
                 }
                 LieEvent::NewNeighbor => {
-                    self.send_lie_procedure(socket, node_info, link_info); // PUSH SendLie event
+                    self.send_lie_procedure(socket, node_info); // PUSH SendLie event
                     LieState::MultipleNeighborsWait
                 }
                 LieEvent::TimerTick => {
@@ -368,12 +362,7 @@ impl LieStateMachine {
     // 2. setting the necessary `not_a_ztp_offer` variable if level was derived from last
     //    known neighbor on this interface and
     // 3. setting `you_are_not_flood_repeater` to computed value
-    fn send_lie_procedure(
-        &self,
-        socket: &mut LinkSocket,
-        node_info: &NodeInfo,
-        link_info: &LinkInfo,
-    ) {
+    fn send_lie_procedure(&self, socket: &mut LinkSocket, node_info: &NodeInfo) {
         let neighbor = match &self.neighbor {
             Some(neighbor) => Some(encoding::Neighbor {
                 originator: node_info.system_id.get(),
@@ -385,8 +374,8 @@ impl LieStateMachine {
         // TODO: fill in these values with real data, instead of None
         let lie_packet = LIEPacket {
             name: None,
-            local_id: link_info.local_link_id as common::LinkIDType,
-            flood_port: link_info.rx_lie_port as common::UDPPortType,
+            local_id: socket.local_link_id as common::LinkIDType,
+            flood_port: socket.rx_lie_addr.port() as common::UDPPortType,
             link_mtu_size: None,
             link_bandwidth: None,
             neighbor,
@@ -424,7 +413,7 @@ impl LieStateMachine {
         };
 
         // TODO: Handle packet send failure for real.
-        socket.send_packet(&packet, link_info.tx_lie_port).unwrap();
+        socket.send_packet(&packet).unwrap();
     }
 
     // implements the "CLEANUP" procedure
