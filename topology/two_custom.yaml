@@ -4,7 +4,7 @@ const: {}
 shards:
   - id: 0
     nodes:
-      - name: core_1
+      - name: rust_core_1
         level: 2
         systemid: 1
         rx_lie_mcast_address: 224.0.100.1
@@ -13,12 +13,12 @@ shards:
         state_thrift_services_port: 19990
         config_thrift_services_port: 19991
         interfaces:
-          - name: if_1_202
+          - name: rust_if_1_202
             metric: 1
             tx_lie_port: 20021
             rx_lie_port: 20022
             rx_tie_port: 20023
-      - name: agg_202
+      - name: rust_agg_202
         passive: true
         level: 1
         systemid: 202
@@ -53,7 +53,7 @@ shards:
             mask: 24
             metric: 2
         interfaces:
-          - name: if_202_1
+          - name: rust_if_202_1
             bandwidth: 200
             metric: 1
             tx_lie_port: 20022
