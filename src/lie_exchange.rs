@@ -375,7 +375,7 @@ impl LieStateMachine {
         let lie_packet = LIEPacket {
             name: None,
             local_id: socket.local_link_id as common::LinkIDType,
-            flood_port: socket.rx_lie_addr.port() as common::UDPPortType,
+            flood_port: socket.lie_rx_addr.port() as common::UDPPortType,
             link_mtu_size: None,
             link_bandwidth: None,
             neighbor,

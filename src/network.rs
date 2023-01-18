@@ -139,11 +139,12 @@ impl Link {
 
 // Wrapper struct for a UdpSocket
 pub struct LinkSocket {
-    lie_socket: UdpSocket,
+    lie_rx_socket: UdpSocket,
+    lie_tx_socket: UdpSocket,
     pub name: String,
     pub local_link_id: u32,
-    pub rx_lie_addr: SocketAddr,
-    pub tx_lie_addr: SocketAddr,
+    pub lie_rx_addr: SocketAddr,
+    pub lie_tx_addr: SocketAddr,
     // TODO: the packet numbers are "per adjacency, per packet", so there should probably be 4 of these
     // however it also says the packet numbers are optional, so w/e
     packet_number: PacketNumber,
@@ -155,28 +156,39 @@ impl LinkSocket {
     pub fn new(
         name: String,
         local_link_id: u32,
-        rx_addr: SocketAddr,
-        tx_addr: SocketAddr,
+        lie_rx_addr: SocketAddr,
+        lie_tx_addr: SocketAddr,
     ) -> io::Result<LinkSocket> {
-        let lie_socket = UdpSocket::bind(rx_addr)?;
-        println!("Interface {}: recving on {}", name, rx_addr);
+        let lie_rx_socket = UdpSocket::bind(lie_rx_addr)?;
+        println!(
+            "Interface {}: recving on {}, sending on {}",
+            name, lie_rx_addr, lie_tx_addr
+        );
 
-        if rx_addr.ip().is_multicast() {
-            match &rx_addr.ip() {
+        if lie_rx_addr.ip().is_multicast() {
+            match &lie_rx_addr.ip() {
                 IpAddr::V4(multiaddr) => {
-                    lie_socket.join_multicast_v4(multiaddr, &Ipv4Addr::UNSPECIFIED)?
+                    lie_rx_socket.join_multicast_v4(multiaddr, &Ipv4Addr::UNSPECIFIED)?
                 }
-                IpAddr::V6(multiaddr) => lie_socket.join_multicast_v6(multiaddr, 0)?,
+                IpAddr::V6(multiaddr) => lie_rx_socket.join_multicast_v6(multiaddr, 0)?,
             }
-            println!("Interface {}: joining multicast address: {}", name, rx_addr);
+            println!(
+                "Interface {}: joining multicast address for recv: {}",
+                name, lie_rx_addr
+            );
         }
+
+        let unspecified = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0);
+        let lie_tx_socket = UdpSocket::bind(unspecified)?;
+        lie_tx_socket.connect(lie_tx_addr)?;
 
         Ok(LinkSocket {
             name,
             local_link_id,
-            lie_socket,
-            rx_lie_addr: rx_addr,
-            tx_lie_addr: tx_addr,
+            lie_rx_socket,
+            lie_tx_socket,
+            lie_rx_addr,
+            lie_tx_addr,
             packet_number: PacketNumber::from(1),
             weak_nonce_local: Nonce::from(1),
             weak_nonce_remote: Nonce::Invalid,
@@ -188,7 +200,7 @@ impl LinkSocket {
         keys: &SecretKeyStore,
     ) -> Result<(ProtocolPacket, SocketAddr), Box<dyn Error>> {
         let mut bytes: Vec<u8> = vec![0; common::DEFAULT_MTU_SIZE as usize];
-        let (length, address) = self.lie_socket.recv_from(&mut bytes)?;
+        let (length, address) = self.lie_rx_socket.recv_from(&mut bytes)?;
         bytes.resize(length, 0u8);
         let packet = packet::parse_and_validate(&bytes, keys)?;
 
@@ -205,7 +217,7 @@ impl LinkSocket {
             self.packet_number,
         );
         let buf = packet::serialize(outer_header, packet);
-        let result = self.lie_socket.send_to(&buf, self.tx_lie_addr);
+        let result = self.lie_tx_socket.send(&buf);
 
         // TODO: These probably need to be incremented in different locations.
         self.packet_number = self.packet_number + 1;
