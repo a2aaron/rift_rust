@@ -7,8 +7,8 @@ shards:
       - name: rust_core_1
         level: 2
         systemid: 1
-        rx_lie_mcast_address: 224.0.100.1
-        rx_lie_v6_mcast_address: ff02::1
+        rx_lie_mcast_address: 224.0.100.10
+        rx_lie_v6_mcast_address: ff02::10
         rx_lie_port: 19980
         state_thrift_services_port: 19990
         config_thrift_services_port: 19991
@@ -22,8 +22,8 @@ shards:
         passive: true
         level: 1
         systemid: 202
-        rx_lie_mcast_address: 224.0.100.2
-        rx_lie_v6_mcast_address: ff02::2
+        rx_lie_mcast_address: 224.0.100.20
+        rx_lie_v6_mcast_address: ff02::20
         rx_lie_port: 19981
         state_thrift_services_port: 19992
         config_thrift_services_port: 19993
