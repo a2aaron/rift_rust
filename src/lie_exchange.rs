@@ -348,6 +348,7 @@ impl LieStateMachine {
                     || curr_neighbor.local_link_id != new_neighbor.local_link_id
                 {
                     self.push(LieEvent::NeighborChangedMinorFields);
+                } else {
                     self.check_three_way(&lie_packet);
                 }
             }
