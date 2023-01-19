@@ -233,16 +233,76 @@ impl LieStateMachine {
                 }
                 // Illegal State Transitions
                 LieEvent::NeighborDroppedReflection => {
-                    unreachable!("This event should only occur in OneWay.")
+                    unreachable!("This event should not occur in TwoWay.")
                 }
                 LieEvent::NeighborChangedMinorFields => {
-                    unreachable!("This event should only occur in OneWay.")
+                    unreachable!("This event should not occur in TwoWay.")
                 }
                 LieEvent::MultipleNeighborsDone => {
                     unreachable!("This event should only occur in MultipleNeighborsWait.")
                 }
             },
-            LieState::ThreeWay => todo!(),
+            LieState::ThreeWay => match event {
+                LieEvent::NeighborChangedAddress => LieState::OneWay,
+                LieEvent::ValidReflection => LieState::ThreeWay,
+                LieEvent::HoldtimeExpired => LieState::OneWay,
+                LieEvent::UnacceptableHeader => LieState::OneWay,
+                LieEvent::NeighborDroppedReflection => LieState::TwoWay,
+                LieEvent::HALChanged(new_hal) => {
+                    self.highest_available_level = new_hal; // store new HAL
+                    LieState::ThreeWay
+                }
+                LieEvent::MultipleNeighbors => {
+                    // start multiple neighbors timer with interval
+                    // `multiple_neighbors_lie_holdtime_multipler` * `default_lie_holdtime`
+                    todo!();
+                    LieState::MultipleNeighborsWait
+                }
+                LieEvent::LevelChanged(new_level) => {
+                    self.derived_level = new_level; // update level with event value
+                    LieState::OneWay
+                }
+                LieEvent::HALSChanged(new_hals) => {
+                    self.highest_available_level_systems = new_hals;
+                    LieState::ThreeWay
+                }
+                LieEvent::TimerTick => {
+                    // PUSH SendLie event, if last valid LIE was received more than `holdtime` ago as advertised by neighbor then PUSH HoldtimeExpired event
+                    todo!();
+                    LieState::ThreeWay
+                }
+                LieEvent::HATChanged(new_hat) => {
+                    self.highest_adjacency_threeway = new_hat; // store HAT
+                    LieState::ThreeWay
+                }
+                LieEvent::UpdateZTPOffer => {
+                    self.ztp_fsm.send_ztp_offer(); // send offer to ZTP FSM
+                    LieState::ThreeWay
+                }
+                LieEvent::LieRcvd(address, lie_header, lie_packet) => {
+                    self.process_lie_procedure(address, &lie_header, &lie_packet); // PROCESS_LIE
+                    LieState::ThreeWay
+                }
+                LieEvent::NeighborChangedLevel => LieState::OneWay,
+                LieEvent::SendLie => {
+                    self.send_lie_procedure(socket, node_info)?; // SEND_LIE
+                    LieState::ThreeWay
+                }
+                LieEvent::FloodLeadersChanged => {
+                    // update `you_are_flood_repeater` LIE elements based on flood leader election results, PUSH SendLie
+                    todo!();
+                    LieState::ThreeWay
+                }
+                LieEvent::MTUMismatch => LieState::OneWay,
+                // Illegal state transitions
+                LieEvent::NewNeighbor => unreachable!("This event should not occur in TwoWay."),
+                LieEvent::NeighborChangedMinorFields => {
+                    unreachable!("This event should not occur in ThreeWay.")
+                }
+                LieEvent::MultipleNeighborsDone => {
+                    unreachable!("This event should only occur in MultipleNeighborsWait.")
+                }
+            },
             LieState::MultipleNeighborsWait => todo!(),
         };
         Ok(new_state)
