@@ -4,6 +4,46 @@
 - The FSM diagram for LIE exchange is really confusing to read. A version where the labels are closer to the arrows and the arrows do not overlap each other would be nice
     - A simplified FSM diagram showing just the "happy path" would be useful for this as well
 - **The list of "action"s in the LIE exchange should really be a table, not freeform prose.**
+- **The description for `CHECK_THREE_WAY` appears to be completely wrong**. It reads as:
+```
+- CHECK_THREE_WAY: if current state is OneWay do nothing else
+ 1. if LIE packet does not contain neighbor then if current state is ThreeWay then PUSH NeighborDroppedReflection else
+ 2. if packet reflects this system's ID and local port and state is ThreeWay then PUSH event ValidReflection else PUSH event MultipleNeighbors
+```
+However, this means that it is impossible for `ValidReflection` to be pushed while in `TwoWay`, which
+seems obviously wrong since `ValidReflection` is the only way to get from `TwoWay` to `ThreeWay`.
+
+Additionally, `rift-python` significantly deviates from the spec. Here is the relevant code:
+```py
+def check_three_way(self):
+    # Section B.1.5
+    # CHANGE: This is a little bit different from the specification
+    # (see comment [CheckThreeWay])
+    if self.fsm.state == self.State.ONE_WAY:
+        pass
+    elif self.fsm.state == self.State.TWO_WAY:
+        if self.neighbor_lie.neighbor_system_id is None:
+            pass
+        elif self.check_reflection():
+            self.fsm.push_event(self.Event.VALID_REFLECTION)
+        else:
+            self.fsm.push_event(self.Event.MULTIPLE_NEIGHBORS)
+    else: # state is THREE_WAY
+        if self.neighbor_lie.neighbor_system_id is None:
+            self.fsm.push_event(self.Event.NEIGHBOR_DROPPED_REFLECTION)
+        elif self.check_reflection():
+            pass
+        else:
+            self.fsm.push_event(self.Event.MULTIPLE_NEIGHBORS)
+```
+As written, it seems `rift-python` implements `CHECK_THREE_WAY` as follows:
+```
+- CHECK_THREE_WAY
+1. If current state is OneWay, do nothing
+2. Else if current state is TwoWay, then if the LIE packet has a valid reflection, then PUSH ValidReflection, otherwise PUSH MultipleNeighbors
+3. Else if current state is ThreeWay, then if the LIE packet has no neighbor, PUSH NeighborDroppedReflection, otherwise PUSH MultipleNeighbors
+```
+
 - Additionally, the table should group similar events together. For example, HALChanged, HALSChanged, and HATChanged should all be next to each other.
 - When defining `PROCESS_LIE`, step #3 has oddly inconsistent wording:
 ```
