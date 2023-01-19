@@ -12,6 +12,7 @@ use crate::{
         },
     },
     network::{LinkSocket, NodeInfo},
+    topology::SystemID,
 };
 
 /// A Link representing a connection from one Node to another Node. Note that these are physical Links
@@ -34,7 +35,8 @@ pub struct LieStateMachine {
     /// from spec: Highest neighbor level of all the formed ThreeWay adjacencies for the node.
     highest_adjacency_threeway: Level,
     /// The system ID of this node.
-    system_id: SystemIDType,
+    system_id: SystemID,
+    local_link_id: LinkIDType,
     /// The MTU of this node.
     mtu: MTUSizeType,
     neighbor: Option<Neighbor>,
@@ -43,7 +45,11 @@ pub struct LieStateMachine {
 }
 
 impl LieStateMachine {
-    pub fn new(configured_level: Level) -> LieStateMachine {
+    pub fn new(
+        configured_level: Level,
+        system_id: SystemID,
+        local_link_id: LinkIDType,
+    ) -> LieStateMachine {
         LieStateMachine {
             lie_state: LieState::OneWay,
             external_event_queue: VecDeque::new(),
@@ -52,7 +58,8 @@ impl LieStateMachine {
             highest_available_level_systems: HALS,
             highest_available_level: Level::Undefined,
             highest_adjacency_threeway: Level::Undefined,
-            system_id: 0,
+            system_id,
+            local_link_id,
             mtu: DEFAULT_MTU_SIZE,
             neighbor: None,
             ztp_fsm: ZtpStateMachine,
@@ -248,13 +255,14 @@ impl LieStateMachine {
         lie_header: &PacketHeader,
         lie_packet: &LIEPacket,
     ) {
+        println!("\tPROCESS_LIE");
         let lie_level: Level = lie_header.level.into();
 
         // 1. if LIE has major version not equal to this node's *or*
         //       system ID equal to this node's system IDor `IllegalSystemID`
         //    then CLEANUP
         if lie_header.major_version != PROTOCOL_MAJOR_VERSION
-            || lie_header.sender == self.system_id
+            || lie_header.sender == self.system_id.get()
             || lie_header.sender == ILLEGAL_SYSTEM_I_D
         {
             self.cleanup();
@@ -389,7 +397,7 @@ impl LieStateMachine {
             name: node_info.name.clone(),
             local_id: socket.local_link_id as common::LinkIDType,
             flood_port: socket.lie_rx_addr.port() as common::UDPPortType,
-            link_mtu_size: Some(DEFAULT_MTU_SIZE),
+            link_mtu_size: Some(self.mtu),
             link_bandwidth: Some(DEFAULT_BANDWIDTH),
             neighbor,
             pod: None,

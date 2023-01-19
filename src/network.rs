@@ -7,7 +7,7 @@ use std::{
 use crate::{
     lie_exchange::{self, LieEvent, LieStateMachine},
     models::{
-        common,
+        common::{self, LinkIDType},
         encoding::{PacketContent, ProtocolPacket},
     },
     packet::{self, Nonce, OuterSecurityEnvelopeHeader, PacketNumber, SecretKeyStore},
@@ -66,7 +66,7 @@ impl Node {
                     system_id: node_desc.system_id,
                 };
                 Link::from_desc(
-                    local_link_id as u32,
+                    local_link_id as LinkIDType,
                     node_info,
                     link_desc.name.clone(),
                     link_desc.lie_rx_addr(),
@@ -94,7 +94,7 @@ pub struct Link {
 
 impl Link {
     pub fn from_desc(
-        local_link_id: u32,
+        local_link_id: LinkIDType,
         node_info: NodeInfo,
         link_name: String,
         lie_rx_addr: SocketAddr,
@@ -102,7 +102,11 @@ impl Link {
     ) -> io::Result<Link> {
         Ok(Link {
             link_socket: LinkSocket::new(link_name, local_link_id, lie_rx_addr, lie_tx_addr)?,
-            lie_fsm: LieStateMachine::new(node_info.configured_level),
+            lie_fsm: LieStateMachine::new(
+                node_info.configured_level,
+                node_info.system_id,
+                local_link_id,
+            ),
             node_info,
         })
     }
@@ -130,7 +134,7 @@ pub struct LinkSocket {
     lie_rx_socket: UdpSocket,
     lie_tx_socket: UdpSocket,
     pub name: String,
-    pub local_link_id: u32,
+    pub local_link_id: LinkIDType,
     pub lie_rx_addr: SocketAddr,
     pub lie_tx_addr: SocketAddr,
     // TODO: the packet numbers are "per adjacency, per packet", so there should probably be 4 of these
@@ -143,7 +147,7 @@ pub struct LinkSocket {
 impl LinkSocket {
     pub fn new(
         name: String,
-        local_link_id: u32,
+        local_link_id: LinkIDType,
         lie_rx_addr: SocketAddr,
         lie_tx_addr: SocketAddr,
     ) -> io::Result<LinkSocket> {
