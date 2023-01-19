@@ -329,13 +329,12 @@ impl LieStateMachine {
         //      then PUSH NeighborChangedAddress else
         //   4. if any of neighbor's flood address port, name, local LinkID changed
         //      then PUSH NeighborChangedMinorFields
-        // 5. CHECK_THREE_WAY (i believe the draft spec here is wrong: This "CHECK_THREE_WAY" should
-        // be at the end of step 4.4, not it's own step as step 5.)
+        // 5. CHECK_THREE_WAY
         match &self.neighbor {
             None => {
                 self.neighbor = Some(new_neighbor);
                 self.push(LieEvent::NewNeighbor);
-                self.check_three_way();
+                self.check_three_way(&lie_packet);
             }
             Some(curr_neighbor) => {
                 if curr_neighbor.system_id != new_neighbor.system_id {
@@ -349,7 +348,7 @@ impl LieStateMachine {
                     || curr_neighbor.local_link_id != new_neighbor.local_link_id
                 {
                     self.push(LieEvent::NeighborChangedMinorFields);
-                    self.check_three_way();
+                    self.check_three_way(&lie_packet);
                 }
             }
         }
@@ -363,11 +362,48 @@ impl LieStateMachine {
     // 2. if packet reflects this system's ID and local port and state is ThreeWay
     //    then PUSH event ValidReflection
     //    else PUSH event MultipleNeighbors
-    fn check_three_way(&self) {
-        if self.lie_state == LieState::OneWay {
-            return;
+    /*
+    Spec is wrong here! We instead implement
+    ```py
+    def check_three_way(self):
+    # Section B.1.5
+    # CHANGE: This is a little bit different from the specification
+    # (see comment [CheckThreeWay])
+    if self.fsm.state == self.State.ONE_WAY:
+        pass
+    elif self.fsm.state == self.State.TWO_WAY:
+        if self.neighbor_lie.neighbor_system_id is None:
+            pass
+        elif self.check_reflection():
+            self.fsm.push_event(self.Event.VALID_REFLECTION)
+        else:
+            self.fsm.push_event(self.Event.MULTIPLE_NEIGHBORS)
+    else: # state is THREE_WAY
+        if self.neighbor_lie.neighbor_system_id is None:
+            self.fsm.push_event(self.Event.NEIGHBOR_DROPPED_REFLECTION)
+        elif self.check_reflection():
+            pass
+        else:
+            self.fsm.push_event(self.Event.MULTIPLE_NEIGHBORS)
+    ```
+     */
+    fn check_three_way(&mut self, packet: &LIEPacket) {
+        match (dbg!(self.lie_state), dbg!(&packet.neighbor)) {
+            (LieState::OneWay, _) => (),
+            (LieState::TwoWay, None) => (),
+            (LieState::TwoWay, Some(neighbor)) => {
+                if neighbor.originator == self.system_id.get()
+                    && neighbor.remote_id == self.local_link_id
+                {
+                    self.push(LieEvent::ValidReflection);
+                } else {
+                    self.push(LieEvent::MultipleNeighbors);
+                }
+            }
+            (LieState::ThreeWay, None) => self.push(LieEvent::NeighborDroppedReflection),
+            (LieState::ThreeWay, Some(_)) => (),
+            (LieState::MultipleNeighborsWait, _) => (),
         }
-        todo!()
     }
 
     // implements the "SEND_LIE" procedure.
