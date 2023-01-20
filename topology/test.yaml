@@ -1,0 +1,60 @@
+const:
+  tx_src_address: 127.0.0.1
+shards:
+  - id: 0
+    nodes:
+      - name: core_1
+        level: top-of-fabric
+        systemid: 1
+        rx_lie_mcast_address: 224.0.0.71
+        rx_lie_port: 20100
+        interfaces:
+          - name: if_1_101
+            metric: 1
+            tx_lie_port: 20001
+            rx_lie_port: 20002
+            rx_tie_port: 20003
+      - name: agg_101
+        systemid: 101
+        rx_lie_mcast_address: 224.0.0.81
+        rx_lie_port: 20102
+        interfaces:
+          - name: if_101_1
+            metric: 1
+            tx_lie_port: 20002
+            rx_lie_port: 20001
+            rx_tie_port: 20004
+          - name: if_101_1001
+            metric: 1
+            tx_lie_port: 20034
+            rx_lie_port: 20033
+            rx_tie_port: 20035
+      - name: edge_1001
+        level: leaf
+        systemid: 1001
+        rx_lie_mcast_address: 224.0.0.91
+        rx_lie_port: 20106
+        v4prefixes:
+          - address: 1.1.1.0
+            mask: 24
+            metric: 1
+          - address: 1.1.2.0
+            mask: 24
+            metric: 1
+          - address: 1.1.3.0
+            mask: 24
+            metric: 1
+          - address: 1.1.4.0
+            mask: 24
+            metric: 1
+          - address: 99.99.99.0
+            mask: 24
+            metric: 1
+            tags:
+              - 9991
+        interfaces:
+          - name: if_1001_101
+            metric: 1
+            tx_lie_port: 20033
+            rx_lie_port: 20034
+            rx_tie_port: 20036

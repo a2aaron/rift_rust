@@ -11,7 +11,7 @@ use crate::{
     models::{
         common::{
             self, LinkIDType, MTUSizeType, SystemIDType, UDPPortType, DEFAULT_BANDWIDTH,
-            DEFAULT_LIE_HOLDTIME, DEFAULT_ZTP_HOLDTIME, ILLEGAL_SYSTEM_I_D, LEAF_LEVEL,
+            DEFAULT_LIE_HOLDTIME, DEFAULT_ZTP_HOLDTIME, ILLEGAL_SYSTEM_I_D,
             MULTIPLE_NEIGHBORS_LIE_HOLDTIME_MULTIPLER,
         },
         encoding::{
@@ -22,6 +22,8 @@ use crate::{
     network::{LinkSocket, NodeInfo},
     topology::SystemID,
 };
+
+pub const LEAF_LEVEL: u8 = common::LEAF_LEVEL as u8;
 
 /// The state machine for LIE exchange. This struct accepts external events, and expects the consumer
 /// of this struct to provide those external events (this is to say, events such as TimerTick are not
@@ -563,29 +565,58 @@ impl LieStateMachine {
         //       this node is a leaf and remote level is lower than HAT OR
         //       (LIE's level is not leaf AND its difference is more than one from this node's level)
         //    then CLEANUP, PUSH UpdateZTPOffer, PUSH UnacceptableHeader
-        let unacceptable_header = match (self.level, lie_level) {
-            (_, Level::Undefined) => true,
-            (Level::Undefined, _) => true,
+        // NOTE: Spec here, as written, produces a somewhat nonsensical implementation and conflicts
+        // with what is said in Section 4.2.2. We instead go with what Section 4.2.2, since this prevents
+        // the nonsensical behavior of disallowing almost all formations between non-leaf nodes and
+        // leaf nodes.
+        let (accept_lie, reason) = match (self.level, lie_level) {
+            // 5.   both nodes advertise defined level values in `level` element in `PacketHeader`
+            (_, Level::Undefined) => (false, "remote level undefined (rule 5)"),
+            (Level::Undefined, _) => (false, "local level undefined (rule 5)"),
             (Level::Value(our_level), Level::Value(remote_level)) => {
-                let this_node_is_leaf = our_level == LEAF_LEVEL as u8;
-                let remote_lower_than_hat = match self.highest_adjacency_threeway {
-                    // TODO: if our HAT is undefined, do we treat that always "lower" than the remote's level? (aka: always true)
-                    // or not (always false)?
-                    Level::Undefined => true,
-                    Level::Value(hat) => remote_level < hat,
+                let local_is_leaf = our_level == LEAF_LEVEL;
+                let remote_is_leaf = remote_level == LEAF_LEVEL;
+                let allow_east_west = false; // TODO: Section 4.3.9 - East - West connections.
+                let remote_below_hat = match self.highest_adjacency_threeway {
+                    // if our HAT is undefined, then we have no adjacencys. Therefore, the remote's
+                    // level can't possibly be below the HAT.
+                    Level::Undefined => false,
+                    Level::Value(hat) => remote_level == hat,
                 };
+                let level_diff = u8::abs_diff(remote_level, our_level);
 
-                let lie_is_not_leaf = remote_level != LEAF_LEVEL as u8;
-                let lie_more_than_one_away = u8::abs_diff(remote_level, our_level) > 1;
-                (this_node_is_leaf && remote_lower_than_hat)
-                    || (lie_is_not_leaf && lie_more_than_one_away)
+                // 6.i. the node is at `leaf_level` value and has no ThreeWay adjacencies already to nodes
+                //      at Highest Adjacency ThreeWay (HAT as defined later in Section 4.2.7.1) with level
+                //      different than the adjacent node
+                if local_is_leaf && !remote_below_hat {
+                    (
+                        true,
+                        "this node is leaf and remote is equal to HAT (or HAT is undefined)",
+                    )
+                }
+                // 6.ii. the node is not at `leaf_level` value and the neighboring node is at `leaf_level` value
+                else if !local_is_leaf && remote_is_leaf {
+                    (true, "local is not leaf and remote is leaf")
+                }
+                // 6.iii. both nodes are at `leaf_level` values *and* both indicate support for Section 4.3.9
+                else if local_is_leaf && remote_is_leaf && allow_east_west {
+                    (true, "local and remote are leaves and east-west is enabled")
+                }
+                // 6.iv. neither node is at `leaf_level` value and the neighboring node is at most one level difference away
+                else if !local_is_leaf && !remote_is_leaf && level_diff <= 1 {
+                    (true, "neither is leaf and are within one level")
+                } else {
+                    (false, "no subclause of rule 6 was satisfied")
+                }
             }
         };
-        if unacceptable_header {
+        if !accept_lie {
             self.cleanup();
             tracing::debug!(
                 local_level =? self.level,
                 remote_level =? lie_level,
+                hat =? self.highest_adjacency_threeway,
+                reason = reason,
                 "rejecting LIE packet (UnacceptableHeader)"
             );
             self.push(LieEvent::UpdateZTPOffer);
@@ -1357,7 +1388,7 @@ impl ZtpStateMachine {
         match offer.level {
             Level::Undefined => self.remove_offer(&offer),
             Level::Value(level) => {
-                if level > LEAF_LEVEL as u8 {
+                if level > LEAF_LEVEL {
                     self.update_offer(offer);
                 } else {
                     self.remove_offer(&offer);

@@ -128,6 +128,32 @@ COMPARE_OFFERS: checks whether the events BetterHAL/LostHAL/BetterHAT/LostHAT ar
 
 - `BetterHAL` and `BetterHAT` could probably be merged together?
 
+- The procedure for `PROCESS_LIE` and the conditions for adjacency formation in Section 4.2.2 conflict with each other. Specficially:
+
+Step 3 of PROCESS_LIE states:
+```
+if LIE has undefined level OR 
+this node's level is undefined OR
+this node is a leaf and remote level is lower than HAT OR
+(LIE's level is not leaf AND its difference is more than one from this node's level)
+then CLEANUP, PUSH UpdateZTPOffer, PUSH UnacceptableHeader else
+```
+
+Condition 6 of the adjacency formation rules states:
+
+```
+6. [
+     i) the node is at `leaf_level` value and has no ThreeWay adjacencies already to nodes
+        at Highest Adjacency ThreeWay (HAT as defined later in Section 4.2.7.1) with level
+        different than the adjacent node *or
+     ii) the node is not at `leaf_level` value and the neighboring node is at `leaf_level` value *or*
+     iii) both nodes are at `leaf_level` values *and* both indicate support for Section 4.3.9 *or*
+     iv) neither node is at `leaf_level` value and the neighboring node is at most one level difference away
+]
+```
+
+Suppose node A is a leaf received a LIE from node B that is level 23. Let node A have no other adjacencies. The adjacency formation rules would allow an adjancy to be formed between node A and node B (specifically: 6.i allows this since node A is at leaf level and has no other ThreeWay adjacencies already). However, `PROCESS_LIE` would not allow this. This is because `(LIE's level is not leaf AND its difference is more than one from this node's level)` is false--node B has level 23 while node A has level 0, so their difference is more than 1. Hence, this would only allow node B to be eligable to form an adjacency with node A, but node A is not eligable (meaning node B would only ever be able to be in TwoWay with node A and node A will always reject node B's LIEs)
+
 # Rift Python
 - two_by_two_by_two_ztp.yaml has `level: superspine`. However, this does not appear to be a real named level value, and attempting to get rift-python to parse the file results in an error.
 - Should ZTP really set the `_derived_level` value directly instead of issuing `LEVEL_CHANGED`? This means that ZTP level changes don't cause the LIE FSM to reset back to `ONE_WAY`, even though `LEVEL_CHANGED` does...
