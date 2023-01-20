@@ -317,7 +317,65 @@ impl LieStateMachine {
                     unreachable!("This event should only occur in MultipleNeighborsWait.")
                 }
             },
-            LieState::MultipleNeighborsWait => todo!(),
+            LieState::MultipleNeighborsWait => match event {
+                LieEvent::HoldtimeExpired => LieState::MultipleNeighborsWait,
+                LieEvent::LieRcvd(_, _, _) => LieState::MultipleNeighborsWait,
+                LieEvent::NeighborDroppedReflection => LieState::MultipleNeighborsWait,
+                LieEvent::MTUMismatch => LieState::MultipleNeighborsWait,
+                // not included
+                // LieEvent::NeighborChangedBFDCapability => LieState::MultipleNeighborsWait
+                LieEvent::LevelChanged(level) => {
+                    self.derived_level = level; // update level with event value
+                    LieState::OneWay
+                }
+                LieEvent::SendLie => LieState::MultipleNeighborsWait,
+                LieEvent::UpdateZTPOffer => {
+                    self.ztp_fsm.send_ztp_offer(); // send offer to ZTP FSM
+                    LieState::MultipleNeighborsWait
+                }
+                LieEvent::MultipleNeighborsDone => LieState::OneWay,
+                LieEvent::HATChanged(hat) => {
+                    self.highest_available_level = hat; // store HAT
+                    LieState::MultipleNeighborsWait
+                }
+                LieEvent::NeighborChangedAddress => LieState::MultipleNeighborsWait,
+                LieEvent::HALSChanged(hals) => {
+                    self.highest_available_level_systems = hals; // store HALS
+                    LieState::MultipleNeighborsWait
+                }
+                LieEvent::HALChanged(hal) => {
+                    self.highest_available_level = hal; // store new HAL
+                    LieState::MultipleNeighborsWait
+                }
+                LieEvent::MultipleNeighbors => {
+                    // start multiple neighbors timer with interval
+                    // `multiple_neighbors_lie_holdtime_multipler` * `default_lie_holdtime`
+                    todo!();
+                    LieState::MultipleNeighborsWait
+                }
+                LieEvent::FloodLeadersChanged => {
+                    // update `you_are_flood_repeater` LIE elements based on flood leader election results
+                    todo!();
+                    LieState::MultipleNeighborsWait
+                }
+                LieEvent::ValidReflection => LieState::MultipleNeighborsWait,
+                LieEvent::TimerTick => {
+                    // check MultipleNeighbors timer, if timer expired PUSH MultipleNeighborsDone
+                    todo!();
+                    LieState::MultipleNeighborsWait
+                }
+                LieEvent::UnacceptableHeader => LieState::MultipleNeighborsWait,
+                // Illegal state transitions
+                LieEvent::NewNeighbor => {
+                    unreachable!("This event should not occur in MultipleNeighborsWait.")
+                }
+                LieEvent::NeighborChangedLevel => {
+                    unreachable!("This event should not occur in MultipleNeighborsWait.")
+                }
+                LieEvent::NeighborChangedMinorFields => {
+                    unreachable!("This event should not occur in MultipleNeighborsWait.")
+                }
+            },
         };
         Ok(new_state)
     }

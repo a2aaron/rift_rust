@@ -87,6 +87,12 @@ Suppose that no current neighbor exists, does this mean that the "CHECK_THREE_WA
 
 - The ZTP specific terminology should be defined sooner, since terms such as HAL, HAT, and HALS appear earlier than Section 4.2.7.1. Alternatively, please include a link to the definition when these terms are introduced.
 
+- In the action list for MultipleNeighborsWait, there is the following:
+```
+on NeighborChangedBFDCapability in MultipleNeighborsWait finishes in MultipleNeighborsWait: no action
+```
+
+What the heck is "NeighborChangedBFDCapability"? This doesn't appear in the list of events. It _does_ appear in the state transition diagram, but it seems that it is impossible for this event to be issued, since nothing else in the spec talks about it.
 
 # Rift Python
 - two_by_two_by_two_ztp.yaml has `level: superspine`. However, this does not appear to be a real named level value, and attempting to get rift-python to parse the file results in an error.
