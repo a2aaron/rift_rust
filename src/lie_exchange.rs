@@ -938,6 +938,9 @@ pub struct ZtpStateMachine {
     hal_needs_resend: bool,
     hals_needs_resend: bool,
     hat_needs_resend: bool,
+    // TODO: this is sort of a hack so that COMPARE_OFFERS and COMPUTE_LEVEL don't both need to
+    // do the same work.
+    compare_offer_results: CompareOffersResults,
 }
 
 impl ZtpStateMachine {
@@ -955,6 +958,10 @@ impl ZtpStateMachine {
             hal_needs_resend: false,
             hals_needs_resend: false,
             hat_needs_resend: false,
+            compare_offer_results: CompareOffersResults {
+                hal: None,
+                hat: None,
+            },
         }
     }
 
@@ -1023,6 +1030,13 @@ impl ZtpStateMachine {
                 // here we sent events, which will be returned and eventually added to all LIE FSMs.
                 if self.hal_needs_resend {
                     events.push(LieEvent::HALChanged(self.highest_available_level));
+                    if let Level::Value(hal) = self.highest_available_level {
+                        // TODO: rift-python just directly sets self._derived_level, which means they
+                        // don't issue LevelChanged (which also means that the LIE FSM does not
+                        // reset to OneWay)
+                        events.push(LieEvent::LevelChanged(Level::Value(hal.saturating_sub(1))));
+                    }
+
                     self.hal_needs_resend = false;
                 }
                 if self.hat_needs_resend {
@@ -1191,25 +1205,22 @@ impl ZtpStateMachine {
             })
             .max();
 
-        if let Some(hal) = best_offer {
-            if self.highest_available_level != hal {
-                events.push(ZtpEvent::BetterHAL);
-                self.highest_available_level = hal;
-                self.hal_needs_resend = true;
-            }
+        if let Some(hal) = best_offer && self.highest_available_level != hal{
+            events.push(ZtpEvent::BetterHAL);
         } else {
             events.push(ZtpEvent::LostHAL);
         }
 
-        if let Some(hat) = best_offer_hat {
-            if self.highest_adjacency_threeway != hat {
-                events.push(ZtpEvent::BetterHAT);
-                self.highest_adjacency_threeway = hat;
-                self.hat_needs_resend = true;
-            }
+        if let Some(hat) = best_offer_hat && self.highest_adjacency_threeway != hat{
+            events.push(ZtpEvent::BetterHAT);
         } else {
             events.push(ZtpEvent::LostHAT);
         }
+
+        self.compare_offer_results = CompareOffersResults {
+            hal: best_offer,
+            hat: best_offer_hat,
+        };
 
         events
     }
@@ -1229,7 +1240,21 @@ impl ZtpStateMachine {
     // Implements the LEVEL_COMPUTE procedure:
     // compute best offered or configured level and HAL/HAT, if anything changed PUSH ComputationDone
     fn level_compute(&mut self) {
-        todo!()
+        let new_hal = self.compare_offer_results.hal;
+        let new_hat = self.compare_offer_results.hat;
+
+        if let Some(new_hal) = new_hal && new_hal != self.highest_available_level {
+            self.highest_available_level = new_hal;
+            self.hal_needs_resend = true;
+        }
+
+        if let Some(new_hat) = new_hat && new_hat != self.highest_adjacency_threeway {
+            self.highest_adjacency_threeway = new_hat;
+            self.hat_needs_resend = true;
+        }
+
+        // rift-python appears to push this unconditionally?
+        self.push(ZtpEvent::ComputationDone);
     }
 
     // Implements the REMOVE_OFFER procedure:
@@ -1315,6 +1340,11 @@ impl ZtpStateMachine {
             None => false,
         }
     }
+}
+
+struct CompareOffersResults {
+    hal: Option<Level>,
+    hat: Option<Level>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

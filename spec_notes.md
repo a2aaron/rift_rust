@@ -124,5 +124,10 @@ COMPARE_OFFERS: checks whether the events BetterHAL/LostHAL/BetterHAT/LostHAT ar
 
 - What is the purpose of the LIE events `HALChanged` and `HALSChanged`? Specifically: Why are these events _in the LIE FSM_ if they do not appear to affect the LIE FSM's behavior, and are exclusively sent by the ZTP FSM? The `HATChanged` event _does_ appear to have an effect, since leaf level nodes are not allowed to form more than one neighbor to HAT nodes. It seems like HAL and HALS should become concepts that only the ZTP FSM cares about.
 
+- `LEVEL_COMPUTE` is defined as "compute best offered or configured level and HAL/HAT, if anything changed PUSH ComputationDone", however, it seems that rift-python always unconditionally pushes ComputationDone. Why does the spec differ here?
+
+- `BetterHAL` and `BetterHAT` could probably be merged together?
+
 # Rift Python
 - two_by_two_by_two_ztp.yaml has `level: superspine`. However, this does not appear to be a real named level value, and attempting to get rift-python to parse the file results in an error.
+- Should ZTP really set the `_derived_level` value directly instead of issuing `LEVEL_CHANGED`? This means that ZTP level changes don't cause the LIE FSM to reset back to `ONE_WAY`, even though `LEVEL_CHANGED` does...
