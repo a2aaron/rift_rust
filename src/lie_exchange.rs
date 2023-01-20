@@ -935,6 +935,9 @@ pub struct ZtpStateMachine {
     holddown_timer_start: Option<Instant>,
     highest_available_level: Level,
     highest_adjacency_threeway: Level,
+    hal_needs_resend: bool,
+    hals_needs_resend: bool,
+    hat_needs_resend: bool,
 }
 
 impl ZtpStateMachine {
@@ -949,6 +952,9 @@ impl ZtpStateMachine {
             holddown_timer_start: None,
             highest_available_level: Level::Undefined,
             highest_adjacency_threeway: Level::Undefined,
+            hal_needs_resend: false,
+            hals_needs_resend: false,
+            hat_needs_resend: false,
         }
     }
 
@@ -1014,7 +1020,20 @@ impl ZtpStateMachine {
                 self.level_compute();
             } else if new_state == ZtpState::UpdatingClients {
                 // on Entry into UpdatingClients: update all LIE FSMs with computation results
-                events = self.get_lie_events();
+                // here we sent events, which will be returned and eventually added to all LIE FSMs.
+                if self.hal_needs_resend {
+                    events.push(LieEvent::HALChanged(self.highest_available_level));
+                    self.hal_needs_resend = false;
+                }
+                if self.hat_needs_resend {
+                    events.push(LieEvent::HATChanged(self.highest_adjacency_threeway));
+                    self.hat_needs_resend = false;
+                }
+                if self.hals_needs_resend {
+                    // TODO: What should a HALS actually look like?
+                    events.push(LieEvent::HALSChanged(HALS));
+                    self.hals_needs_resend = false;
+                }
             }
             self.state = new_state;
         }
@@ -1176,6 +1195,7 @@ impl ZtpStateMachine {
             if self.highest_available_level != hal {
                 events.push(ZtpEvent::BetterHAL);
                 self.highest_available_level = hal;
+                self.hal_needs_resend = true;
             }
         } else {
             events.push(ZtpEvent::LostHAL);
@@ -1185,6 +1205,7 @@ impl ZtpStateMachine {
             if self.highest_adjacency_threeway != hat {
                 events.push(ZtpEvent::BetterHAT);
                 self.highest_adjacency_threeway = hat;
+                self.hat_needs_resend = true;
             }
         } else {
             events.push(ZtpEvent::LostHAT);
@@ -1280,12 +1301,6 @@ impl ZtpStateMachine {
     // implements "if any southbound adjacencies present then update holddown timer
     // to normal duration else fire holddown timer immediately"
     fn check_sounthbound_adjacencies(&mut self) {
-        todo!()
-    }
-
-    // Returns a vector of LieEvents containing the HAL, HAT, and HALS values. This is used to send
-    // LieEvent::HAL/HAT/HALSChanged to the LIE FSM when nessecary.
-    fn get_lie_events(&self) -> Vec<LieEvent> {
         todo!()
     }
 

@@ -122,5 +122,7 @@ COMPARE_OFFERS: checks whether the events BetterHAL/LostHAL/BetterHAT/LostHAT ar
     - How does this interact with the holdtime? If the holdtime expires, should we send the offer with an UNDEFINED_LEVEL? Or should we continue to send the offer with the level that the LIE packet contained?
     - When, precisely, does an offer expire?
 
+- What is the purpose of the LIE events `HALChanged` and `HALSChanged`? Specifically: Why are these events _in the LIE FSM_ if they do not appear to affect the LIE FSM's behavior, and are exclusively sent by the ZTP FSM? The `HATChanged` event _does_ appear to have an effect, since leaf level nodes are not allowed to form more than one neighbor to HAT nodes. It seems like HAL and HALS should become concepts that only the ZTP FSM cares about.
+
 # Rift Python
 - two_by_two_by_two_ztp.yaml has `level: superspine`. However, this does not appear to be a real named level value, and attempting to get rift-python to parse the file results in an error.
