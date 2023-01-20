@@ -1480,28 +1480,3 @@ pub struct Offer {
 
 #[derive(Debug, Clone)]
 pub struct LeafFlags;
-
-#[cfg(test)]
-mod test {
-
-    #[test]
-    #[ignore = "not yet implemented"]
-    fn two_nodes() {
-        // let id_a = 0;
-        // let id_b = 1;
-        // let mut top_of_fabric = Node::new(Some(TOP_OF_FABRIC_LEVEL), id_a);
-        // let mut leaf_node = Node::new(None, id_b);
-        // top_of_fabric.add_link(&leaf_node);
-        // leaf_node.add_link(&top_of_fabric);
-
-        // let mut network = Network {
-        //     nodes: vec![top_of_fabric, leaf_node],
-        // };
-        // network.run();
-
-        // let top_of_fabric = network.get(id_a).unwrap();
-        // let leaf_node = network.get(id_b).unwrap();
-        // assert_eq!(top_of_fabric.discovered_level, Some(TOP_OF_FABRIC_LEVEL));
-        // assert_eq!(leaf_node.discovered_level, Some(LEAF_LEVEL));
-    }
-}
