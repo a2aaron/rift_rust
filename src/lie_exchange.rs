@@ -171,9 +171,11 @@ impl LieStateMachine {
                     LieState::OneWay
                 }
                 // Illegal State Transitions
-                LieEvent::MultipleNeighborsDone => {
-                    unreachable!("This event should only occur in MultipleNeighborsWait.")
-                }
+                LieEvent::MultipleNeighborsDone => unreachable!(
+                    "event {} cannot occur in {:?}",
+                    event.name(),
+                    self.lie_state
+                ),
             },
             LieState::TwoWay => match event {
                 LieEvent::NeighborChangedAddress => LieState::OneWay,
@@ -241,15 +243,21 @@ impl LieStateMachine {
                     LieState::TwoWay
                 }
                 // Illegal State Transitions
-                LieEvent::NeighborDroppedReflection => {
-                    unreachable!("This event should not occur in TwoWay.")
-                }
-                LieEvent::NeighborChangedMinorFields => {
-                    unreachable!("This event should not occur in TwoWay.")
-                }
-                LieEvent::MultipleNeighborsDone => {
-                    unreachable!("This event should only occur in MultipleNeighborsWait.")
-                }
+                LieEvent::NeighborDroppedReflection => unreachable!(
+                    "event {} cannot occur in {:?}",
+                    event.name(),
+                    self.lie_state
+                ),
+                LieEvent::NeighborChangedMinorFields => unreachable!(
+                    "event {} cannot occur in {:?}",
+                    event.name(),
+                    self.lie_state
+                ),
+                LieEvent::MultipleNeighborsDone => unreachable!(
+                    "event {} cannot occur in {:?}",
+                    event.name(),
+                    self.lie_state
+                ),
             },
             LieState::ThreeWay => match event {
                 LieEvent::NeighborChangedAddress => LieState::OneWay,
@@ -311,13 +319,22 @@ impl LieStateMachine {
                 }
                 LieEvent::MTUMismatch => LieState::OneWay,
                 // Illegal state transitions
-                LieEvent::NewNeighbor => unreachable!("This event should not occur in TwoWay."),
-                LieEvent::NeighborChangedMinorFields => {
-                    unreachable!("This event should not occur in ThreeWay.")
-                }
-                LieEvent::MultipleNeighborsDone => {
-                    unreachable!("This event should only occur in MultipleNeighborsWait.")
-                }
+                LieEvent::NewNeighbor => unreachable!(
+                    "event {} cannot occur in {:?}",
+                    event.name(),
+                    self.lie_state
+                ),
+                LieEvent::NeighborChangedMinorFields => unreachable!(
+                    "event {} cannot occur in {:?}",
+                    event.name(),
+                    self.lie_state
+                ),
+
+                LieEvent::MultipleNeighborsDone => unreachable!(
+                    "event {} cannot occur in {:?}",
+                    event.name(),
+                    self.lie_state
+                ),
             },
             LieState::MultipleNeighborsWait => match event {
                 LieEvent::HoldtimeExpired => LieState::MultipleNeighborsWait,
@@ -368,15 +385,21 @@ impl LieStateMachine {
                 }
                 LieEvent::UnacceptableHeader => LieState::MultipleNeighborsWait,
                 // Illegal state transitions
-                LieEvent::NewNeighbor => {
-                    unreachable!("This event should not occur in MultipleNeighborsWait.")
-                }
-                LieEvent::NeighborChangedLevel => {
-                    unreachable!("This event should not occur in MultipleNeighborsWait.")
-                }
-                LieEvent::NeighborChangedMinorFields => {
-                    unreachable!("This event should not occur in MultipleNeighborsWait.")
-                }
+                LieEvent::NewNeighbor => unreachable!(
+                    "event {} cannot occur in {:?}",
+                    event.name(),
+                    self.lie_state
+                ),
+                LieEvent::NeighborChangedLevel => unreachable!(
+                    "event {} cannot occur in {:?}",
+                    event.name(),
+                    self.lie_state
+                ),
+                LieEvent::NeighborChangedMinorFields => unreachable!(
+                    "event {} cannot occur in {:?}",
+                    event.name(),
+                    self.lie_state
+                ),
             },
         };
         Ok(new_state)
