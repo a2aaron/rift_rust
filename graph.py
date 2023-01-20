@@ -80,6 +80,7 @@ for ((start, end), info) in all_edges.items():
 
     edge_a = start
     edge_b = end
+    constraint = start_level > end_level
     if end_level > start_level:
         edge_a = end
         edge_b = start
@@ -96,8 +97,8 @@ for ((start, end), info) in all_edges.items():
     start_color = color_lookup[start_state]
     end_color = color_lookup[end_state]
     
-
-    graph.append(f'{edge_a} -> {edge_b} [dir={direction} color="{start_color}:{end_color}"];')
+    
+    graph.append(f'{edge_a} -> {edge_b} [dir={direction} color="{start_color}:{end_color}" constraint={constraint}];')
 
 graph.append("}")
 graph = "\n".join(graph)
