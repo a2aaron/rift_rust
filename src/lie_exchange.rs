@@ -58,10 +58,10 @@ pub struct LieStateMachine {
     /// will remaining in TwoWay or ThreeWay before automatically PUSHing HoldtimeExpired and reverting
     /// to OneWay..
     #[serde(skip)]
-    last_valid_lie: Option<(Instant, PacketHeader, LIEPacket)>,
+    last_valid_lie: Option<(Timer, PacketHeader, LIEPacket)>,
     /// The time at which the multiple neighbors timer was started
     #[serde(skip)]
-    multiple_neighbors_start: Option<Instant>,
+    multiple_neighbors_timer: Timer,
 }
 
 impl LieStateMachine {
@@ -79,7 +79,9 @@ impl LieStateMachine {
             highest_adjacency_threeway: Level::Undefined,
             neighbor: None,
             last_valid_lie: None,
-            multiple_neighbors_start: None,
+            multiple_neighbors_timer: Timer::new(Duration::from_secs(
+                MULTIPLE_NEIGHBORS_LIE_HOLDTIME_MULTIPLER as u64 * DEFAULT_LIE_HOLDTIME as u64,
+            )),
         }
     }
 
@@ -471,13 +473,7 @@ impl LieStateMachine {
                 LieEvent::ValidReflection => LieState::MultipleNeighborsWait,
                 LieEvent::TimerTick => {
                     // check MultipleNeighbors timer, if timer expired PUSH MultipleNeighborsDone
-                    let time_since_start =
-                        Instant::now().duration_since(self.multiple_neighbors_start.unwrap());
-                    let timer_length = Duration::from_secs(
-                        MULTIPLE_NEIGHBORS_LIE_HOLDTIME_MULTIPLER as u64
-                            * DEFAULT_LIE_HOLDTIME as u64,
-                    );
-                    if time_since_start > timer_length {
+                    if self.multiple_neighbors_timer.is_expired() {
                         self.push(LieEvent::MultipleNeighborsDone);
                     };
                     LieState::MultipleNeighborsWait
@@ -556,7 +552,11 @@ impl LieStateMachine {
         // ]
         // The spec, when defining a "valid LIE" and says "passing all checks for adjacency formation
         // while disregarding all clauses involving level values" (4.2.7.1, Valid Offered Level (VOL))
-        self.last_valid_lie = Some((Instant::now(), lie_header.clone(), lie_packet.clone()));
+        self.last_valid_lie = {
+            let mut timer = Timer::new(Duration::from_secs(lie_packet.holdtime as u64));
+            timer.start();
+            Some((timer, lie_header.clone(), lie_packet.clone()))
+        };
 
         // 3. if LIE has undefined level OR
         //       this node's level is undefined OR
@@ -798,7 +798,7 @@ impl LieStateMachine {
 
     // implements "start multiple neighbors timer with interval `multiple_neighbors_lie_holdtime_multipler` * `default_lie_holdtime`"
     fn start_multiple_neighbors_timer(&mut self) {
-        self.multiple_neighbors_start = Some(Instant::now())
+        self.multiple_neighbors_timer.start()
     }
 
     // implements "update `you_are_flood_repeater` LIE elements based on flood leader election results"
@@ -809,11 +809,7 @@ impl LieStateMachine {
     // returns true if "if last valid LIE was received more than `holdtime` ago as advertised by neighbor"
     fn is_lie_expired(&self) -> bool {
         match &self.last_valid_lie {
-            Some((recv_time, _, lie_packet)) => {
-                let holdtime = Duration::from_secs(lie_packet.holdtime as u64);
-                let receive_time = Instant::now().duration_since(*recv_time);
-                receive_time > holdtime
-            }
+            Some((timer, _, _)) => timer.is_expired(),
             None => true, // No prior valid LIE to compare against, so always considere expired
         }
     }
@@ -983,7 +979,7 @@ pub struct ZtpStateMachine {
     leaf_flags: LeafFlags,
     offers: HashMap<SystemIDType, Offer>,
     #[serde(skip)]
-    holddown_timer_start: Option<Instant>,
+    holddown_timer: Timer,
     highest_available_level: Level,
     highest_adjacency_threeway: Level,
     hal_needs_resend: bool,
@@ -1003,7 +999,7 @@ impl ZtpStateMachine {
             configured_level,
             leaf_flags,
             offers: HashMap::new(),
-            holddown_timer_start: None,
+            holddown_timer: Timer::new(Duration::from_secs(DEFAULT_ZTP_HOLDTIME as u64)),
             highest_available_level: Level::Undefined,
             highest_adjacency_threeway: Level::Undefined,
             hal_needs_resend: false,
@@ -1129,7 +1125,7 @@ impl ZtpStateMachine {
                 ZtpEvent::ShortTic => {
                     // remove expired offers and if holddown timer expired PUSH_EVENT HoldDownExpired
                     self.remove_expired_offers();
-                    if self.holddown_timer_expired() {
+                    if self.holddown_timer.is_expired() {
                         self.push(ZtpEvent::HoldDownExpired);
                     }
                     ZtpState::HoldingDown
@@ -1384,27 +1380,16 @@ impl ZtpStateMachine {
         self.offers.retain(|_, offer| !offer.expired);
     }
 
-    // returns true if "holddown timer expired"
-    fn holddown_timer_expired(&self) -> bool {
-        match self.holddown_timer_start {
-            Some(timer) => {
-                let duration = Instant::now().duration_since(timer);
-                duration > Duration::from_secs(DEFAULT_ZTP_HOLDTIME as u64)
-            }
-            None => true,
-        }
-    }
-
     // implements "if any southbound adjacencies present then update holddown timer
     // to normal duration else fire holddown timer immediately"
     fn check_sounthbound_adjacencies(&mut self) {
         let any_southbound = self.offers.values().any(|offer| offer.level < self.level());
         if any_southbound {
             // Set holddown timer to normal duration.
-            self.holddown_timer_start = Some(Instant::now());
+            self.holddown_timer.start();
         } else {
-            // Fire the holddown timmer immediate by setting it to None.
-            self.holddown_timer_start = None;
+            // Fire the holddown timer immediately.
+            self.holddown_timer.force_expire();
         }
     }
 
@@ -1501,3 +1486,36 @@ pub struct Offer {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct LeafFlags;
+
+pub struct Timer {
+    start: Option<Instant>,
+    length: Duration,
+}
+
+impl Timer {
+    pub fn new(length: Duration) -> Timer {
+        Timer {
+            start: None,
+            length,
+        }
+    }
+
+    /// Start the timer. If the timer is already running, this function resets the timer.
+    pub fn start(&mut self) {
+        self.start = Some(Instant::now());
+    }
+
+    /// Force the timer to expire, even if the timer still has some time left on it.
+    pub fn force_expire(&mut self) {
+        self.start = None;
+    }
+
+    /// Returns true if the timer has been running for longer than `duration` or if the timer
+    /// has not been started yet.
+    pub fn is_expired(&self) -> bool {
+        match self.start {
+            Some(start) => start.elapsed() > self.length,
+            None => true,
+        }
+    }
+}

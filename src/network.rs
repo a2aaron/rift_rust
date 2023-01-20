@@ -8,7 +8,7 @@ use std::{
 use serde::Serialize;
 
 use crate::{
-    lie_exchange::{self, LeafFlags, LieEvent, LieStateMachine, ZtpStateMachine},
+    lie_exchange::{self, LeafFlags, LieEvent, LieStateMachine, Timer, ZtpStateMachine},
     models::{
         common::{self, LinkIDType},
         encoding::{PacketContent, ProtocolPacket},
@@ -130,7 +130,7 @@ struct Link {
     #[serde(flatten)]
     node_info: NodeInfo,
     #[serde(skip)]
-    last_timer_tick: Option<Instant>,
+    last_timer_tick: Timer,
 }
 
 impl Link {
@@ -147,7 +147,7 @@ impl Link {
             link_socket: LinkSocket::new(link_name, local_link_id, lie_rx_addr, lie_tx_addr)?,
             lie_fsm: LieStateMachine::new(node_info.configured_level),
             node_info,
-            last_timer_tick: None,
+            last_timer_tick: Timer::new(Duration::from_secs(1)),
         })
     }
 
@@ -171,16 +171,9 @@ impl Link {
             RecvPacketResult::Err(err) => println!("Could not recv packet: {}", err),
         }
 
-        let do_timer_tick = if let Some(last_timer_tick) = self.last_timer_tick {
-            let duration = Instant::now().duration_since(last_timer_tick);
-            duration > Duration::from_secs(1)
-        } else {
-            true
-        };
-
-        if do_timer_tick {
+        if self.last_timer_tick.is_expired() {
             self.lie_fsm.push_external_event(LieEvent::TimerTick);
-            self.last_timer_tick = Some(Instant::now());
+            self.last_timer_tick.start()
         }
 
         self.lie_fsm
