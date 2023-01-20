@@ -6,7 +6,7 @@ shards:
   - id: 0
     nodes:
        - name: core_1
-         level: superspine
+         level: top-of-fabric
          systemid: 1
          rx_lie_mcast_address: 224.0.255.1
          rx_lie_port: 20200
@@ -42,7 +42,7 @@ shards:
 
 
        - name: core_2
-         level: superspine
+         level: top-of-fabric
          systemid: 2
          rx_lie_mcast_address: 224.0.255.2
          rx_lie_port: 20202
