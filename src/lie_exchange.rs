@@ -4,7 +4,7 @@ use crate::{
     models::{
         common::{
             self, LinkIDType, MTUSizeType, SystemIDType, UDPPortType, DEFAULT_BANDWIDTH,
-            DEFAULT_LIE_HOLDTIME, DEFAULT_MTU_SIZE, ILLEGAL_SYSTEM_I_D, LEAF_LEVEL,
+            DEFAULT_LIE_HOLDTIME, ILLEGAL_SYSTEM_I_D, LEAF_LEVEL,
         },
         encoding::{
             self, LIEPacket, PacketHeader, ProtocolPacket, PROTOCOL_MAJOR_VERSION,
@@ -15,11 +15,7 @@ use crate::{
     topology::SystemID,
 };
 
-/// A Link representing a connection from one Node to another Node. Note that these are physical Links
-/// (that is to say, they are links which are physical present in the topology, but not nessecarily
-/// links which that will be considered to be logically present in the topology later on.)
-/// Note that this struct represents only one direction in a link--the other linked Node also has it's
-/// own Link pointing back to the first Node.
+/// The state machien for LIE exchange.
 pub struct LieStateMachine {
     /// Determines if a link is logically present in the topology. If the LIEState is ThreeWay, then
     /// the link is logically present. Otherwise, it is not.
@@ -34,22 +30,16 @@ pub struct LieStateMachine {
     highest_available_level: Level,
     /// from spec: Highest neighbor level of all the formed ThreeWay adjacencies for the node.
     highest_adjacency_threeway: Level,
-    /// The system ID of this node.
-    system_id: SystemID,
-    local_link_id: LinkIDType,
-    /// The MTU of this node.
-    mtu: MTUSizeType,
+    /// The neighbor value, which is set by PROCESS_LIE and checked by SEND_LIE. If this value is
+    /// Some, then a neighbor has been observed and will be sent out during SEND_LIE to reflect back
+    /// to the node on the other end of the Link.
     neighbor: Option<Neighbor>,
     /// The ZTP state machine. Maybe this should go into the Link?
     ztp_fsm: ZtpStateMachine,
 }
 
 impl LieStateMachine {
-    pub fn new(
-        configured_level: Level,
-        system_id: SystemID,
-        local_link_id: LinkIDType,
-    ) -> LieStateMachine {
+    pub fn new(configured_level: Level) -> LieStateMachine {
         LieStateMachine {
             lie_state: LieState::OneWay,
             external_event_queue: VecDeque::new(),
@@ -58,15 +48,14 @@ impl LieStateMachine {
             highest_available_level_systems: HALS,
             highest_available_level: Level::Undefined,
             highest_adjacency_threeway: Level::Undefined,
-            system_id,
-            local_link_id,
-            mtu: DEFAULT_MTU_SIZE,
             neighbor: None,
             ztp_fsm: ZtpStateMachine,
         }
     }
 
-    // Process a single external event, if there exists events in the event queue
+    /// Process a single external event, if there exists events in the event queue. Note that this
+    /// also processes any events pushed by the PUSH procedure, so the `chained_event_queue` will
+    /// be empty both before and after this call.
     pub fn process_external_event(
         &mut self,
         socket: &mut LinkSocket,
@@ -102,11 +91,13 @@ impl LieStateMachine {
         Ok(())
     }
 
+    /// Push an external event onto the LIEEvent queue.
     pub fn push_external_event(&mut self, event: LieEvent) {
         println!("Pushing external event {}", event.name());
         self.external_event_queue.push_back(event);
     }
 
+    // process the given LIE event. The return value is the LieState to transition into next.
     fn process_lie_event(
         &mut self,
         event: LieEvent,
@@ -139,7 +130,15 @@ impl LieStateMachine {
                 }
                 LieEvent::NeighborChangedAddress => LieState::OneWay,
                 LieEvent::LieRcvd(address, lie_header, lie_packet) => {
-                    self.process_lie_procedure(address, &lie_header, &lie_packet); // PROCESS_LIE
+                    // PROCESS_LIE
+                    self.process_lie_procedure(
+                        address,
+                        &lie_header,
+                        &lie_packet,
+                        node_info.system_id,
+                        socket.local_link_id,
+                        socket.mtu,
+                    );
                     LieState::OneWay
                 }
                 LieEvent::ValidReflection => LieState::ThreeWay,
@@ -177,7 +176,15 @@ impl LieStateMachine {
             LieState::TwoWay => match event {
                 LieEvent::NeighborChangedAddress => LieState::OneWay,
                 LieEvent::LieRcvd(address, lie_header, lie_packet) => {
-                    self.process_lie_procedure(address, &lie_header, &lie_packet); // PROCESS_LIE
+                    // PROCESS_LIE
+                    self.process_lie_procedure(
+                        address,
+                        &lie_header,
+                        &lie_packet,
+                        node_info.system_id,
+                        socket.local_link_id,
+                        socket.mtu,
+                    );
                     LieState::TwoWay
                 }
                 LieEvent::UpdateZTPOffer => {
@@ -280,7 +287,14 @@ impl LieStateMachine {
                     LieState::ThreeWay
                 }
                 LieEvent::LieRcvd(address, lie_header, lie_packet) => {
-                    self.process_lie_procedure(address, &lie_header, &lie_packet); // PROCESS_LIE
+                    self.process_lie_procedure(
+                        address,
+                        &lie_header,
+                        &lie_packet,
+                        node_info.system_id,
+                        socket.local_link_id,
+                        socket.mtu,
+                    ); // PROCESS_LIE
                     LieState::ThreeWay
                 }
                 LieEvent::NeighborChangedLevel => LieState::OneWay,
@@ -314,6 +328,9 @@ impl LieStateMachine {
         address: IpAddr,
         lie_header: &PacketHeader,
         lie_packet: &LIEPacket,
+        system_id: SystemID,
+        local_link_id: LinkIDType,
+        mtu: MTUSizeType,
     ) {
         println!("\tPROCESS_LIE");
         let lie_level: Level = lie_header.level.into();
@@ -322,14 +339,14 @@ impl LieStateMachine {
         //       system ID equal to this node's system IDor `IllegalSystemID`
         //    then CLEANUP
         if lie_header.major_version != PROTOCOL_MAJOR_VERSION
-            || lie_header.sender == self.system_id.get()
+            || lie_header.sender == system_id.get()
             || lie_header.sender == ILLEGAL_SYSTEM_I_D
         {
             self.cleanup();
             return;
         }
 
-        if lie_packet.link_mtu_size != Some(self.mtu) {
+        if lie_packet.link_mtu_size != Some(mtu) {
             // 2. if LIE has non matching MTUs
             //    then CLEANUP, PUSH UpdateZTPOffer, PUSH MTUMismatch
             self.cleanup();
@@ -394,7 +411,7 @@ impl LieStateMachine {
             None => {
                 self.neighbor = Some(new_neighbor);
                 self.push(LieEvent::NewNeighbor);
-                self.check_three_way(&lie_packet);
+                self.check_three_way(&lie_packet, system_id, local_link_id);
             }
             Some(curr_neighbor) => {
                 if curr_neighbor.system_id != new_neighbor.system_id {
@@ -409,7 +426,7 @@ impl LieStateMachine {
                 {
                     self.push(LieEvent::NeighborChangedMinorFields);
                 } else {
-                    self.check_three_way(&lie_packet);
+                    self.check_three_way(&lie_packet, system_id, local_link_id);
                 }
             }
         }
@@ -448,14 +465,17 @@ impl LieStateMachine {
             self.fsm.push_event(self.Event.MULTIPLE_NEIGHBORS)
     ```
      */
-    fn check_three_way(&mut self, packet: &LIEPacket) {
+    fn check_three_way(
+        &mut self,
+        packet: &LIEPacket,
+        system_id: SystemID,
+        local_link_id: LinkIDType,
+    ) {
         match (dbg!(self.lie_state), dbg!(&packet.neighbor)) {
             (LieState::OneWay, _) => (),
             (LieState::TwoWay, None) => (),
             (LieState::TwoWay, Some(neighbor)) => {
-                if neighbor.originator == self.system_id.get()
-                    && neighbor.remote_id == self.local_link_id
-                {
+                if neighbor.originator == system_id.get() && neighbor.remote_id == local_link_id {
                     self.push(LieEvent::ValidReflection);
                 } else {
                     self.push(LieEvent::MultipleNeighbors);
@@ -494,7 +514,7 @@ impl LieStateMachine {
             name: node_info.node_name.clone(),
             local_id: socket.local_link_id as common::LinkIDType,
             flood_port: socket.flood_port() as common::UDPPortType,
-            link_mtu_size: Some(self.mtu),
+            link_mtu_size: Some(socket.mtu),
             link_bandwidth: Some(DEFAULT_BANDWIDTH),
             neighbor,
             pod: None,
@@ -523,7 +543,6 @@ impl LieStateMachine {
             content: encoding::PacketContent::Lie(lie_packet),
         };
 
-        // TODO: Handle packet send failure for real.
         socket.send_packet(&packet)?;
         Ok(())
     }
@@ -536,6 +555,9 @@ impl LieStateMachine {
 
     // implements the "PUSH Event" procedure.
     // PUSH Event: queues an event to be executed by the FSM upon exit of this action
+    // Note that this adds events to the `chained_event_queue`. When processing an external event,
+    // any chained events will also be processed before the next external event. This is to prevent
+    // weird edge cases where an external event may be added between a set of chained events.
     fn push(&mut self, event: LieEvent) {
         println!("\tPUSH {:?}", event);
         self.chained_event_queue.push_back(event)

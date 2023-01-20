@@ -1,7 +1,7 @@
 use std::{
     error::Error,
     io,
-    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, UdpSocket},
+    net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket},
 };
 
 use crate::{
@@ -118,11 +118,7 @@ impl Link {
     ) -> io::Result<Link> {
         Ok(Link {
             link_socket: LinkSocket::new(link_name, local_link_id, lie_rx_addr, lie_tx_addr)?,
-            lie_fsm: LieStateMachine::new(
-                node_info.configured_level,
-                node_info.system_id,
-                local_link_id,
-            ),
+            lie_fsm: LieStateMachine::new(node_info.configured_level),
             node_info,
         })
     }
@@ -155,6 +151,8 @@ pub struct LinkSocket {
     lie_tx_socket: UdpSocket,
     /// The name of this link, typically specified by the topology description file
     pub name: String,
+    /// The maximum transmissible unit size.
+    pub mtu: common::MTUSizeType,
     /// The local link ID. This value must be unique across all the links on a particular node, but
     /// does not need to be unique across nodes.
     pub local_link_id: LinkIDType,
@@ -225,6 +223,7 @@ impl LinkSocket {
             local_link_id,
             lie_rx_socket,
             lie_tx_socket,
+            mtu: common::DEFAULT_MTU_SIZE,
             packet_number: PacketNumber::from(1),
             weak_nonce_local: Nonce::from(1),
             weak_nonce_remote: Nonce::Invalid,
