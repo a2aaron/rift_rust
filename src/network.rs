@@ -93,6 +93,17 @@ impl Node {
 
     /// Run the node for one step.
     fn step(&mut self, key: &SecretKeyStore) -> io::Result<()> {
+        // Run the ZTP FSM
+        let lie_events = self.ztp_fsm.process_external_events();
+
+        // Add any LIE events returned by the ZTP to the LIE FSMs
+        for link in &mut self.links {
+            for lie_event in &lie_events {
+                link.lie_fsm.push_external_event(lie_event.clone());
+            }
+        }
+
+        // Run each LIE FSM
         for link in &mut self.links {
             link.step(key, &mut self.ztp_fsm)?;
         }

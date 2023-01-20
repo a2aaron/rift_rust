@@ -117,5 +117,9 @@ COMPARE_OFFERS: checks whether the events BetterHAL/LostHAL/BetterHAT/LostHAT ar
 
 - Why does COMPARE_OFFERS "return events" if those events are always then PUSHed, why not just make COMPARE_OFFERS do the pushing?
 
+- In LIE Exchange, when doing "send offer to ZTP FSM", 
+    - Do we use the value stored for "neighbor"? If so, this means CLEANUP would "clear" the values stored for neighbor. If not, do we just use the values from the most recent valid LIE packet, even if we have not formed an adjacency with the node?
+    - how does this interact with the holdtime? If the holdtime expires, should we send the offer with an UNDEFINED_LEVEL? Or should we continue to send the offer with the level that the LIE packet contained?
+
 # Rift Python
 - two_by_two_by_two_ztp.yaml has `level: superspine`. However, this does not appear to be a real named level value, and attempting to get rift-python to parse the file results in an error.

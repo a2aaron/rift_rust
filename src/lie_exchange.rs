@@ -764,19 +764,22 @@ impl LieStateMachine {
         }
     }
 
+    // Send an offer to the ZTP FSM. Specifically, it sends the offer using values from the most
+    // recently recieved valid LIE packet. Note that this is _not_ affected by HoldtimeExpired events
+    // or the CLEANUP procedure.
     fn send_offer(&self, ztp_fsm: &mut ZtpStateMachine) {
-        let level = if let Some((_, header, _)) = &self.last_valid_lie {
-            if let Some(level) = header.level {
+        if let Some((_, header, _)) = &self.last_valid_lie {
+            let level = if let Some(level) = header.level {
                 Level::Value(level as u8)
             } else {
                 Level::Undefined
-            }
-        } else {
-            Level::Undefined
-        };
-
-        let offer = Offer { level };
-        ztp_fsm.push_external_event(ZtpEvent::NeighborOffer(offer))
+            };
+            let offer = Offer {
+                level,
+                system_id: header.sender,
+            };
+            ztp_fsm.push_external_event(ZtpEvent::NeighborOffer(offer))
+        }
     }
 }
 
@@ -928,20 +931,30 @@ impl ZtpStateMachine {
 
     /// Process all external events, if there exist any events in the event queue. Note that this
     /// also processes any events pushed by the PUSH procedure, so the `chained_event_queue` will
-    /// be empty both before and after this call.
-    pub fn process_external_events(&mut self) {
+    /// be empty both before and after this call. This function returns a vector containing events
+    /// that should be pushed to the LIE FSMs associated with this state machine. In particular, the
+    /// following events may be returned:
+    /// LieEvent::HALChanged
+    /// LieEvent::HATChanged
+    /// LieEvent::HALSChanged
+    pub fn process_external_events(&mut self) -> Vec<LieEvent> {
         assert!(self.chained_event_queue.is_empty());
+        let mut lie_events = vec![];
         while !self.external_event_queue.is_empty() {
-            self.process_external_event();
+            let events = self.process_external_event();
+            lie_events.extend(events);
         }
         assert!(self.chained_event_queue.is_empty());
+        lie_events
     }
 
     /// Process a single external event, if there exists an event in the event queue. Note that this
     /// also processes any events pushed by the PUSH procedure, so the `chained_event_queue` will
     /// be empty both before and after this call.
-    fn process_external_event(&mut self) {
+    fn process_external_event(&mut self) -> Vec<LieEvent> {
         assert!(self.chained_event_queue.is_empty());
+        let mut lie_events = vec![];
+
         if let Some(event) = self.external_event_queue.pop_front() {
             println!(
                 "processing external event: {} (in {:?})",
@@ -949,7 +962,8 @@ impl ZtpStateMachine {
                 self.state
             );
             let new_state = self.process_ztp_event(event);
-            self.transition_to(new_state);
+            let events = self.transition_to(new_state);
+            lie_events.extend(events);
         }
 
         // Drain the chained event queue, if an external event caused some events to be pushed.
@@ -960,24 +974,28 @@ impl ZtpStateMachine {
                 self.state
             );
             let new_state = self.process_ztp_event(event);
-            self.transition_to(new_state);
+            let events = self.transition_to(new_state);
+            lie_events.extend(events);
         }
+        lie_events
     }
 
     /// Set the current state to the new state. If this would cause the state to enter LieState::OneWay,
     /// then CLEANUP is also performed. If the current state is already equal to the new state, noop.
-    fn transition_to(&mut self, new_state: ZtpState) {
+    fn transition_to(&mut self, new_state: ZtpState) -> Vec<LieEvent> {
+        let mut events = vec![];
         if new_state != self.state {
             println!("transitioning: {:?} -> {:?}", self.state, new_state);
-            // on Entry into ComputeBestOffer: LEVEL_COMPUTE
-            // on Entry into UpdatingClients: update all LIE FSMs with computation results
             if new_state == ZtpState::ComputeBestOffer {
+                // on Entry into ComputeBestOffer: LEVEL_COMPUTE
                 self.level_compute();
             } else if new_state == ZtpState::UpdatingClients {
-                self.update_lie_fsm();
+                // on Entry into UpdatingClients: update all LIE FSMs with computation results
+                events = self.get_lie_events();
             }
             self.state = new_state;
         }
+        events
     }
 
     /// Push an external event onto the ZTPEvent queue.
@@ -1210,7 +1228,9 @@ impl ZtpStateMachine {
         todo!()
     }
 
-    fn update_lie_fsm(&self) {
+    // Returns a vector of LieEvents containing the HAL, HAT, and HALS values. This is used to send
+    // LieEvent::HAL/HAT/HALSChanged to the LIE FSM when nessecary.
+    fn get_lie_events(&self) -> Vec<LieEvent> {
         todo!()
     }
 }
@@ -1267,6 +1287,7 @@ impl ZtpEvent {
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct Offer {
     level: Level,
+    system_id: SystemIDType,
 }
 
 #[derive(Debug, Clone)]
