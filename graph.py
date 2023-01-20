@@ -9,7 +9,7 @@ def process_node(node):
     configured_level = node["configured_level"]
     
     edges = {}
-    level = None
+    level = configured_level
     for link in node["links"]:
         result = process_link(link)
         if result is None:
