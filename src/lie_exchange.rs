@@ -113,7 +113,7 @@ impl LieStateMachine {
                 LieEvent::UnacceptableHeader => LieState::OneWay,
                 LieEvent::LevelChanged(new_level) => {
                     // update level with event value, PUSH SendLie event
-                    self.derived_level = new_level;
+                    self.update_level(new_level);
                     self.push(LieEvent::SendLie);
                     LieState::OneWay
                 }
@@ -125,7 +125,7 @@ impl LieStateMachine {
                 }
                 LieEvent::HoldtimeExpired => LieState::OneWay,
                 LieEvent::HALSChanged(new_hals) => {
-                    self.highest_available_level_systems = new_hals; // store HALS
+                    self.store_HALS(new_hals); // store HALS
                     LieState::OneWay
                 }
                 LieEvent::NeighborChangedAddress => LieState::OneWay,
@@ -151,21 +151,23 @@ impl LieStateMachine {
                     LieState::OneWay
                 }
                 LieEvent::HATChanged(new_hat) => {
-                    self.highest_adjacency_threeway = new_hat; // store HAT
+                    self.store_HAT(new_hat); // store HAT
                     LieState::OneWay
                 }
                 LieEvent::MultipleNeighbors => {
-                    todo!(); // start multiple neighbors timer with interval `multiple_neighbors_lie_holdtime_multipler` * `default_lie_holdtime`
+                    // start multiple neighbors timer with interval `multiple_neighbors_lie_holdtime_multipler` * `default_lie_holdtime`
+                    self.start_multiple_neighbors_timer();
                     LieState::MultipleNeighborsWait
                 }
                 LieEvent::MTUMismatch => LieState::OneWay,
                 LieEvent::FloodLeadersChanged => {
-                    todo!(); // update `you_are_flood_repeater` LIE elements based on flood leader election results
+                    // update `you_are_flood_repeater` LIE elements based on flood leader election results
+                    self.update_you_are_flood_repeater();
                     LieState::OneWay
                 }
                 LieEvent::NeighborDroppedReflection => LieState::OneWay,
                 LieEvent::HALChanged(new_hal) => {
-                    self.highest_available_level = new_hal; // store new HAL
+                    self.store_HAL(new_hal); // store new HAL
                     LieState::OneWay
                 }
                 // Illegal State Transitions
@@ -199,22 +201,22 @@ impl LieStateMachine {
                     self.send_lie_procedure(socket, node_info)?; // SEND_LIE
                     LieState::TwoWay
                 }
-                LieEvent::HATChanged(hat) => {
-                    self.highest_adjacency_threeway = hat; // store HAT
+                LieEvent::HATChanged(new_hat) => {
+                    self.store_HAT(new_hat); // store HAT
                     LieState::TwoWay
                 }
-                LieEvent::HALChanged(hal) => {
-                    self.highest_available_level = hal; // store new HAL
+                LieEvent::HALChanged(new_hal) => {
+                    self.store_HAL(new_hal); // store new HAL
                     LieState::TwoWay
                 }
-                LieEvent::LevelChanged(level) => {
+                LieEvent::LevelChanged(new_level) => {
                     // update level with event value
-                    self.derived_level = level;
+                    self.update_level(new_level);
                     LieState::TwoWay
                 }
                 LieEvent::FloodLeadersChanged => {
                     // update `you_are_flood_repeater` LIE elements based on flood leader election results
-                    todo!();
+                    self.update_you_are_flood_repeater();
                     LieState::TwoWay
                 }
                 LieEvent::NewNeighbor => {
@@ -231,11 +233,11 @@ impl LieStateMachine {
                 LieEvent::MultipleNeighbors => {
                     // start multiple neighbors timer with interval
                     // `multiple_neighbors_lie_holdtime_multipler` * `default_lie_holdtime`
-                    todo!();
+                    self.start_multiple_neighbors_timer();
                     LieState::MultipleNeighborsWait
                 }
-                LieEvent::HALSChanged(hals) => {
-                    self.highest_available_level_systems = hals; // store HALS
+                LieEvent::HALSChanged(new_hals) => {
+                    self.store_HALS(new_hals); // store HALS
                     LieState::TwoWay
                 }
                 // Illegal State Transitions
@@ -262,7 +264,7 @@ impl LieStateMachine {
                 LieEvent::MultipleNeighbors => {
                     // start multiple neighbors timer with interval
                     // `multiple_neighbors_lie_holdtime_multipler` * `default_lie_holdtime`
-                    todo!();
+                    self.start_multiple_neighbors_timer();
                     LieState::MultipleNeighborsWait
                 }
                 LieEvent::LevelChanged(new_level) => {
@@ -279,7 +281,7 @@ impl LieStateMachine {
                     LieState::ThreeWay
                 }
                 LieEvent::HATChanged(new_hat) => {
-                    self.highest_adjacency_threeway = new_hat; // store HAT
+                    self.store_HAT(new_hat); // store HAT
                     LieState::ThreeWay
                 }
                 LieEvent::UpdateZTPOffer => {
@@ -304,7 +306,7 @@ impl LieStateMachine {
                 }
                 LieEvent::FloodLeadersChanged => {
                     // update `you_are_flood_repeater` LIE elements based on flood leader election results, PUSH SendLie
-                    todo!();
+                    self.update_you_are_flood_repeater();
                     LieState::ThreeWay
                 }
                 LieEvent::MTUMismatch => LieState::OneWay,
@@ -324,8 +326,8 @@ impl LieStateMachine {
                 LieEvent::MTUMismatch => LieState::MultipleNeighborsWait,
                 // not included
                 // LieEvent::NeighborChangedBFDCapability => LieState::MultipleNeighborsWait
-                LieEvent::LevelChanged(level) => {
-                    self.derived_level = level; // update level with event value
+                LieEvent::LevelChanged(new_level) => {
+                    self.update_level(new_level); // update level with event value
                     LieState::OneWay
                 }
                 LieEvent::SendLie => LieState::MultipleNeighborsWait,
@@ -334,28 +336,28 @@ impl LieStateMachine {
                     LieState::MultipleNeighborsWait
                 }
                 LieEvent::MultipleNeighborsDone => LieState::OneWay,
-                LieEvent::HATChanged(hat) => {
-                    self.highest_available_level = hat; // store HAT
+                LieEvent::HATChanged(new_hat) => {
+                    self.store_HAT(new_hat); // store HAT
                     LieState::MultipleNeighborsWait
                 }
                 LieEvent::NeighborChangedAddress => LieState::MultipleNeighborsWait,
-                LieEvent::HALSChanged(hals) => {
-                    self.highest_available_level_systems = hals; // store HALS
+                LieEvent::HALSChanged(new_hals) => {
+                    self.store_HALS(new_hals); // store HALS
                     LieState::MultipleNeighborsWait
                 }
-                LieEvent::HALChanged(hal) => {
-                    self.highest_available_level = hal; // store new HAL
+                LieEvent::HALChanged(new_hal) => {
+                    self.store_HAL(new_hal); // store new HAL
                     LieState::MultipleNeighborsWait
                 }
                 LieEvent::MultipleNeighbors => {
                     // start multiple neighbors timer with interval
                     // `multiple_neighbors_lie_holdtime_multipler` * `default_lie_holdtime`
-                    todo!();
+                    self.start_multiple_neighbors_timer();
                     LieState::MultipleNeighborsWait
                 }
                 LieEvent::FloodLeadersChanged => {
                     // update `you_are_flood_repeater` LIE elements based on flood leader election results
-                    todo!();
+                    self.update_you_are_flood_repeater();
                     LieState::MultipleNeighborsWait
                 }
                 LieEvent::ValidReflection => LieState::MultipleNeighborsWait,
@@ -619,6 +621,36 @@ impl LieStateMachine {
     fn push(&mut self, event: LieEvent) {
         println!("\tPUSH {:?}", event);
         self.chained_event_queue.push_back(event)
+    }
+
+    // implements "update level with event value" from spec
+    fn update_level(&mut self, new_level: Level) {
+        self.derived_level = new_level;
+    }
+
+    // implements "store new HAL" from spec
+    fn store_HAL(&mut self, new_hal: Level) {
+        self.highest_available_level = new_hal;
+    }
+
+    // implements "store HAT" from spec
+    fn store_HAT(&mut self, new_hat: Level) {
+        self.highest_adjacency_threeway = new_hat;
+    }
+
+    // implements "store HALS" from spec
+    fn store_HALS(&mut self, new_hals: HALS) {
+        self.highest_available_level_systems = new_hals;
+    }
+
+    // implements "start multiple neighbors timer with interval `multiple_neighbors_lie_holdtime_multipler` * `default_lie_holdtime`"
+    fn start_multiple_neighbors_timer(&mut self) {
+        todo!()
+    }
+
+    // implements "update `you_are_flood_repeater` LIE elements based on flood leader election results"
+    fn update_you_are_flood_repeater(&mut self) {
+        todo!()
     }
 }
 
