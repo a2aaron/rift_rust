@@ -45,6 +45,9 @@ As written, it seems `rift-python` implements `CHECK_THREE_WAY` as follows:
 ```
 
 - Additionally, the table should group similar events together. For example, HALChanged, HALSChanged, and HATChanged should all be next to each other.
+
+- It would be nice if the event list was seperated into "external" and "internal" events. Some events, such as TimerTick, only occur due to outside sources providing the event. In that sense, they are "external". Other events, such as "SendLie" or "ValidReflection" are only encountered via PUSH Event procedures, which themselves are only ever done by actions. In that sense, they are "internal". It would be nice if those were clearly seperated, so it is easier to see how the FSM interacts with the rest of the RIFT system.
+
 - When defining `PROCESS_LIE`, step #3 has oddly inconsistent wording:
 ```
 3. if LIE has undefined level OR  this node's level is undefined OR this node is a leaf and remote level is lower than HAT OR (LIE's level is not leaf AND its difference is more than one from this node's level) then CLEANUP, PUSH UpdateZTPOffer, PUSH UnacceptableHeader 
