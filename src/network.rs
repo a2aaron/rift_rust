@@ -128,7 +128,8 @@ impl Link {
 
     pub fn step(&mut self, keys: &SecretKeyStore) -> io::Result<()> {
         match self.link_socket.recv_packet(keys) {
-            Ok((packet, address)) => {
+            RecvPacketResult::NoPacket => (),
+            RecvPacketResult::Packet { packet, address } => {
                 match packet.content {
                     PacketContent::Lie(content) => self.lie_fsm.push_external_event(
                         LieEvent::LieRcvd(address.ip(), packet.header, content),
@@ -136,7 +137,7 @@ impl Link {
                     _ => (),
                 }
             }
-            Err(err) => println!("Could not recv packet: {}", err),
+            RecvPacketResult::Err(err) => println!("Could not recv packet: {}", err),
         }
 
         let do_timer_tick = if let Some(last_timer_tick) = self.last_timer_tick {
@@ -226,6 +227,9 @@ impl LinkSocket {
             );
         }
 
+        // Set the receving socket to non-blocking.
+        lie_rx_socket.set_nonblocking(true)?;
+
         // For the send socket, we bind to an unspecified address, since we don't care about the
         // particular address we send from (we will let the OS pick for us).
         let unspecified = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0);
@@ -246,17 +250,25 @@ impl LinkSocket {
         })
     }
 
-    pub fn recv_packet(
-        &self,
-        keys: &SecretKeyStore,
-    ) -> Result<(ProtocolPacket, SocketAddr), Box<dyn Error>> {
-        let mut bytes: Vec<u8> = vec![0; common::DEFAULT_MTU_SIZE as usize];
-        let (length, address) = self.lie_rx_socket.recv_from(&mut bytes)?;
-        bytes.resize(length, 0u8);
-        let packet = packet::parse_and_validate(&bytes, keys)?;
-
+    pub fn recv_packet(&self, keys: &SecretKeyStore) -> RecvPacketResult {
         // TODO: set weak_nonce_remote based on packet data?
-        Ok((packet, address))
+        let mut bytes: Vec<u8> = vec![0; common::DEFAULT_MTU_SIZE as usize];
+        match self.lie_rx_socket.recv_from(&mut bytes) {
+            Ok((length, address)) => {
+                bytes.resize(length, 0u8);
+                match packet::parse_and_validate(&bytes, keys) {
+                    Ok(packet) => RecvPacketResult::Packet { packet, address },
+                    Err(err) => RecvPacketResult::Err(err.into()),
+                }
+            }
+            Err(err) => {
+                if err.kind() == io::ErrorKind::WouldBlock {
+                    RecvPacketResult::NoPacket
+                } else {
+                    RecvPacketResult::Err(err.into())
+                }
+            }
+        }
     }
 
     // TODO: THIS SUCKS (move tx_lie_port into this struct instead of passing it in. maybe also put LinkInfo into this struct)
@@ -281,6 +293,15 @@ impl LinkSocket {
         // TODO
         0
     }
+}
+
+pub enum RecvPacketResult {
+    NoPacket,
+    Packet {
+        packet: ProtocolPacket,
+        address: SocketAddr,
+    },
+    Err(Box<dyn Error>),
 }
 
 /// A convience struct for keep track of node specific information.
