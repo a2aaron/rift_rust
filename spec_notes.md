@@ -103,5 +103,19 @@ What the heck is "NeighborChangedBFDCapability"? This doesn't appear in the list
 
 - In the definition for PURGE_OFFERS, "COMPARE_OFFERS" is spelled "COMPARE OFFERS" (the underscore is missing)
 
+- In the definition for COMPARE_OFFERS, what does it mean to "return" the events BetterHAL/LostHAL/BetterHAT/LostHAT? Additionally, when are these events "necessary"? It also seems that the there is a word missing.
+```
+COMPARE_OFFERS: checks whether based on current offers and held last results the events BetterHAL/LostHAL/BetterHAT/LostHAT are necessary and returns them
+```
+
+rewrite as:
+```
+COMPARE_OFFERS: checks whether the events BetterHAL/LostHAL/BetterHAT/LostHAT are necessary and returns them based on current offers and held last results
+```
+- UPDATE_OFFER: "adjancency" should be spelled as "adjacency". Also, what is an "adjacency holdtime"? Is that the current value of the "adjacency holddown timer"?
+- PURGE_OFFERS - Really do REMOVE_OFFER? REMOVE_OFFER already does COMPARE_OFFERS + push events, so this is likely to add tons of extraneous events for no reason. It should probably read "remove all held offers, COMPARE_OFFERS, PUSH according events"
+
+- Why does COMPARE_OFFERS "return events" if those events are always then PUSHed, why not just make COMPARE_OFFERS do the pushing?
+
 # Rift Python
 - two_by_two_by_two_ztp.yaml has `level: superspine`. However, this does not appear to be a real named level value, and attempting to get rift-python to parse the file results in an error.

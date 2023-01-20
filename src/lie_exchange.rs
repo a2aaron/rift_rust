@@ -1,5 +1,5 @@
 use std::{
-    collections::VecDeque,
+    collections::{HashMap, VecDeque},
     io,
     net::IpAddr,
     time::{Duration, Instant},
@@ -61,7 +61,7 @@ impl LieStateMachine {
             highest_available_level: Level::Undefined,
             highest_adjacency_threeway: Level::Undefined,
             neighbor: None,
-            ztp_fsm: ZtpStateMachine::new(),
+            ztp_fsm: ZtpStateMachine::new(configured_level, LeafFlags),
             last_valid_lie: None,
             multiple_neighbors_start: None,
             hold_time: Duration::from_secs(DEFAULT_LIE_HOLDTIME as u64),
@@ -854,7 +854,7 @@ impl LieEvent {
 /// A numerical level. A level of "Undefined" typically means that the level was either not specified
 /// (and hence will be inferred by ZTP) or it is not known yet. See also: [topology::Level]
 // TODO: are levels only in 0-24 range? if so, maybe enforce this?
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Level {
     Undefined,
     Value(u8),
@@ -886,14 +886,20 @@ pub struct ZtpStateMachine {
     state: ZtpState,
     external_event_queue: VecDeque<ZtpEvent>,
     chained_event_queue: VecDeque<ZtpEvent>,
+    configured_level: Level,
+    leaf_flags: LeafFlags,
+    offers: HashMap<Offer, Instant>,
 }
 
 impl ZtpStateMachine {
-    pub fn new() -> ZtpStateMachine {
+    pub fn new(configured_level: Level, leaf_flags: LeafFlags) -> ZtpStateMachine {
         ZtpStateMachine {
             state: ZtpState::ComputeBestOffer,
             external_event_queue: VecDeque::new(),
             chained_event_queue: VecDeque::new(),
+            configured_level,
+            leaf_flags,
+            offers: HashMap::new(),
         }
     }
 
@@ -964,9 +970,9 @@ impl ZtpStateMachine {
     fn process_ztp_event(&mut self, event: ZtpEvent) -> ZtpState {
         match self.state {
             ZtpState::ComputeBestOffer => match event {
-                ZtpEvent::ChangeLocalConfiguredLevel => {
+                ZtpEvent::ChangeLocalConfiguredLevel(new_level) => {
                     // store configured level
-                    self.store_configured_level();
+                    self.store_configured_level(new_level);
                     ZtpState::ComputeBestOffer
                 }
                 ZtpEvent::BetterHAT => ZtpState::HoldingDown,
@@ -978,9 +984,9 @@ impl ZtpStateMachine {
                     }
                     ZtpState::HoldingDown
                 }
-                ZtpEvent::NeighborOffer => {
+                ZtpEvent::NeighborOffer(offer) => {
                     // PROCESS_OFFER
-                    self.process_offer();
+                    self.process_offer(offer);
                     ZtpState::HoldingDown
                 }
                 ZtpEvent::ComputationDone => ZtpState::HoldingDown,
@@ -992,9 +998,9 @@ impl ZtpStateMachine {
                     self.purge_offers();
                     ZtpState::ComputeBestOffer
                 }
-                ZtpEvent::ChangeLocalHierarchyIndications => {
+                ZtpEvent::ChangeLocalHierarchyIndications(new_flags) => {
                     // store leaf flags
-                    self.store_leaf_flags();
+                    self.store_leaf_flags(new_flags);
                     ZtpState::ComputeBestOffer
                 }
             },
@@ -1003,17 +1009,17 @@ impl ZtpStateMachine {
                     self.level_compute(); // LEVEL_COMPUTE
                     ZtpState::ComputeBestOffer
                 }
-                ZtpEvent::NeighborOffer => {
-                    self.process_offer(); // PROCESS_OFFER
+                ZtpEvent::NeighborOffer(offer) => {
+                    self.process_offer(offer); // PROCESS_OFFER
                     ZtpState::ComputeBestOffer
                 }
                 ZtpEvent::BetterHAT => {
                     self.level_compute(); // LEVEL_COMPUTE
                     ZtpState::ComputeBestOffer
                 }
-                ZtpEvent::ChangeLocalHierarchyIndications => {
+                ZtpEvent::ChangeLocalHierarchyIndications(new_flags) => {
                     // store leaf flags and LEVEL_COMPUTE
-                    self.store_leaf_flags();
+                    self.store_leaf_flags(new_flags);
                     self.level_compute();
                     ZtpState::ComputeBestOffer
                 }
@@ -1028,9 +1034,9 @@ impl ZtpStateMachine {
                     ZtpState::ComputeBestOffer
                 }
                 ZtpEvent::ComputationDone => ZtpState::UpdatingClients,
-                ZtpEvent::ChangeLocalConfiguredLevel => {
+                ZtpEvent::ChangeLocalConfiguredLevel(new_level) => {
                     // store configured level and LEVEL_COMPUTE
-                    self.store_configured_level();
+                    self.store_configured_level(new_level);
                     self.level_compute();
                     ZtpState::ComputeBestOffer
                 }
@@ -1055,16 +1061,16 @@ impl ZtpStateMachine {
                 }
                 ZtpEvent::BetterHAT => ZtpState::ComputeBestOffer,
                 ZtpEvent::BetterHAL => ZtpState::ComputeBestOffer,
-                ZtpEvent::ChangeLocalConfiguredLevel => {
-                    self.store_configured_level(); // store configured level
+                ZtpEvent::ChangeLocalConfiguredLevel(new_level) => {
+                    self.store_configured_level(new_level); // store configured level
                     ZtpState::ComputeBestOffer
                 }
-                ZtpEvent::ChangeLocalHierarchyIndications => {
-                    self.store_leaf_flags(); // store leaf flags
+                ZtpEvent::ChangeLocalHierarchyIndications(new_flags) => {
+                    self.store_leaf_flags(new_flags); // store leaf flags
                     ZtpState::ComputeBestOffer
                 }
-                ZtpEvent::NeighborOffer => {
-                    self.process_offer(); // PROCESS_OFFER
+                ZtpEvent::NeighborOffer(offer) => {
+                    self.process_offer(offer); // PROCESS_OFFER
                     ZtpState::UpdatingClients
                 }
                 ZtpEvent::LostHAT => ZtpState::ComputeBestOffer,
@@ -1090,15 +1096,21 @@ impl ZtpStateMachine {
     // Implements the COMPARE_OFFERS procedure:
     // checks whether based on current offers and held last results the events
     //BetterHAL/LostHAL/BetterHAT/LostHAT are necessary and returns them
-    fn compare_offers(&mut self) {
+    fn compare_offers(&mut self) -> Vec<ZtpEvent> {
         todo!()
     }
 
     // Implements the UPDATE_OFFER procedure:
     // store current offer with adjacency holdtime as lifetime and COMPARE_OFFERS,
     // then PUSH according events
-    fn update_offer(&mut self) {
-        todo!()
+    fn update_offer(&mut self, offer: &Offer) {
+        let lifetime = self.offers.get_mut(&offer).unwrap();
+        // TODO: what does "adjacency holdtime" mean?
+        *lifetime = Instant::now();
+
+        for event in self.compare_offers() {
+            self.push(event);
+        }
     }
 
     // Implements the LEVEL_COMPUTE procedure:
@@ -1109,14 +1121,24 @@ impl ZtpStateMachine {
 
     // Implements the REMOVE_OFFER procedure:
     // remote the according offer and COMPARE_OFFERS, PUSH according events
-    fn remove_offer(&mut self) {
-        todo!()
+    fn remove_offer(&mut self, offer: &Offer) {
+        self.offers.remove(&offer).unwrap();
+
+        for event in self.compare_offers() {
+            self.push(event);
+        }
     }
 
     // Implements the PURGE_OFFERS procedure:
     // REMOVE_OFFER for all held offers, COMPARE_OFFERS, PUSH according events
     fn purge_offers(&mut self) {
-        todo!()
+        // I think the spec is wrong here.
+        // Spec should be "remove all held offers", not "REMOVE_OFFER for all held offers"
+        self.offers.clear();
+
+        for event in self.compare_offers() {
+            self.push(event);
+        }
     }
 
     // Implements the PROCESS_OFFER procedure:
@@ -1124,18 +1146,27 @@ impl ZtpStateMachine {
     // 2. else
     //    1. if offered level > leaf then UPDATE_OFFER
     //    2. else REMOVE_OFFER
-    fn process_offer(&mut self) {
-        todo!()
+    fn process_offer(&mut self, offer: Offer) {
+        match offer.level {
+            Level::Undefined => self.remove_offer(&offer),
+            Level::Value(level) => {
+                if level > LEAF_LEVEL as u8 {
+                    self.update_offer(&offer);
+                } else {
+                    self.remove_offer(&offer);
+                }
+            }
+        }
     }
 
     // implements "store leaf flags"
-    fn store_leaf_flags(&mut self) {
-        todo!()
+    fn store_leaf_flags(&mut self, new_flags: LeafFlags) {
+        self.leaf_flags = new_flags;
     }
 
     // implements "store configured level"
-    fn store_configured_level(&mut self) {
-        todo!()
+    fn store_configured_level(&mut self, new_level: Level) {
+        self.configured_level = new_level;
     }
 
     // implements "remove expired offers"
@@ -1166,14 +1197,14 @@ enum ZtpState {
     UpdatingClients,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum ZtpEvent {
     // node locally configured with new leaf flags.
-    ChangeLocalHierarchyIndications,
+    ChangeLocalHierarchyIndications(LeafFlags),
     // node locally configured with a defined level
-    ChangeLocalConfiguredLevel,
+    ChangeLocalConfiguredLevel(Level),
     // a new neighbor offer with optional level and neighbor state.
-    NeighborOffer,
+    NeighborOffer(Offer),
     // better HAL computed internally.
     BetterHAL,
     // better HAT computed internally.
@@ -1194,9 +1225,9 @@ pub enum ZtpEvent {
 impl ZtpEvent {
     fn name(&self) -> &str {
         match self {
-            ZtpEvent::ChangeLocalHierarchyIndications => "ChangeLocalHierarchyIndications",
-            ZtpEvent::ChangeLocalConfiguredLevel => "ChangeLocalConfiguredLevel",
-            ZtpEvent::NeighborOffer => "NeighborOffer",
+            ZtpEvent::ChangeLocalHierarchyIndications(_) => "ChangeLocalHierarchyIndications",
+            ZtpEvent::ChangeLocalConfiguredLevel(_) => "ChangeLocalConfiguredLevel",
+            ZtpEvent::NeighborOffer(_) => "NeighborOffer",
             ZtpEvent::BetterHAL => "BetterHAL",
             ZtpEvent::BetterHAT => "BetterHAT",
             ZtpEvent::LostHAL => "LostHAL",
@@ -1207,6 +1238,14 @@ impl ZtpEvent {
         }
     }
 }
+
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub struct Offer {
+    level: Level,
+}
+
+#[derive(Debug, Clone)]
+pub struct LeafFlags;
 
 #[cfg(test)]
 mod test {
