@@ -100,6 +100,10 @@ impl LieStateMachine {
             let new_state = self.process_lie_event(event, socket, node_info)?;
             if new_state != self.lie_state {
                 println!("transitioning: {:?} -> {:?}", self.lie_state, new_state);
+                // on Entry into OneWay: CLEANUP
+                if new_state == LieState::OneWay {
+                    self.cleanup();
+                }
                 self.lie_state = new_state;
             }
         }
@@ -683,7 +687,8 @@ impl LieStateMachine {
     // implements the "CLEANUP" procedure
     // CLEANUP: neighbor MUST be reset to unknown
     fn cleanup(&mut self) {
-        self.neighbor = None
+        self.neighbor = None;
+        self.last_valid_lie = None;
     }
 
     // implements the "PUSH Event" procedure.
