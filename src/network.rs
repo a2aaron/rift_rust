@@ -218,13 +218,11 @@ impl LinkSocket {
         lie_rx_addr: SocketAddr,
         lie_tx_addr: SocketAddr,
     ) -> io::Result<LinkSocket> {
+        let _span = tracing::info_span!("LinkSocket::new", interface = name).entered();
         // For the receive socket, we bind to the receive address since we are only listening on
         // this socket.
         let lie_rx_socket = UdpSocket::bind(lie_rx_addr)?;
-        println!(
-            "Interface {}: recving on {}, sending on {}",
-            name, lie_rx_addr, lie_tx_addr
-        );
+        tracing::info!(recv_addr =% lie_rx_addr, send_addr =% lie_tx_addr, "recv socket bound");
 
         // If the receive address is multicast, then we need to join the mutlicast group. We leave
         // the interface unspecified here, since we don't care about which particular interface we
@@ -236,9 +234,9 @@ impl LinkSocket {
                 }
                 IpAddr::V6(multiaddr) => lie_rx_socket.join_multicast_v6(multiaddr, 0)?,
             }
-            println!(
-                "Interface {}: joining multicast address for recv: {}",
-                name, lie_rx_addr
+            tracing::info!(
+                address =% lie_rx_addr,
+                "recv socket joined multicast group",
             );
         }
 

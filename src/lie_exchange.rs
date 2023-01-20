@@ -5,6 +5,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+use tracing::instrument;
+
 use crate::{
     models::{
         common::{
@@ -95,22 +97,28 @@ impl LieStateMachine {
     ) -> io::Result<()> {
         assert!(self.chained_event_queue.is_empty());
         if let Some(event) = self.external_event_queue.pop_front() {
-            println!(
-                "processing external event: {} (in {:?})",
-                event.name(),
-                self.lie_state
-            );
+            let _span = tracing::trace_span!(
+                target: "LIE_FSM",
+                "process_external_event",
+                queue_type = "external",
+                event = event.name(),
+                state =? self.lie_state
+            )
+            .entered();
             let new_state = self.process_lie_event(event, socket, node_info, ztp_fsm)?;
             self.transition_to(new_state);
         }
 
         // Drain the chained event queue, if an external event caused some events to be pushed.
         while let Some(event) = self.chained_event_queue.pop_front() {
-            println!(
-                "processing chained event: {} (in {:?})",
-                event.name(),
-                self.lie_state
-            );
+            let _span = tracing::trace_span!(
+                target: "LIE_FSM",
+                "process_external_event",
+                queue_type = "external",
+                event = event.name(),
+                state =? self.lie_state
+            )
+            .entered();
             let new_state = self.process_lie_event(event, socket, node_info, ztp_fsm)?;
             self.transition_to(new_state);
         }
@@ -121,7 +129,7 @@ impl LieStateMachine {
     /// then CLEANUP is also performed. If the current state is already equal to the new state, noop.
     fn transition_to(&mut self, new_state: LieState) {
         if new_state != self.lie_state {
-            println!("transitioning: {:?} -> {:?}", self.lie_state, new_state);
+            tracing::trace!(from =? self.lie_state, to =? new_state, "state transition",);
             // on Entry into OneWay: CLEANUP
             if new_state == LieState::OneWay {
                 self.cleanup();
@@ -132,7 +140,7 @@ impl LieStateMachine {
 
     /// Push an external event onto the LIEEvent queue.
     pub fn push_external_event(&mut self, event: LieEvent) {
-        println!("Pushing external event {}", event.name());
+        tracing::trace!(event = event.name(), "pushing external event");
         self.external_event_queue.push_back(event);
     }
 
@@ -481,7 +489,7 @@ impl LieStateMachine {
         local_link_id: LinkIDType,
         mtu: MTUSizeType,
     ) {
-        println!("\tPROCESS_LIE");
+        tracing::trace!("PROCESS_LIE procedure");
         let lie_level: Level = lie_header.level.into();
 
         // 1. if LIE has major version not equal to this node's *or*
@@ -641,7 +649,7 @@ impl LieStateMachine {
         system_id: SystemID,
         local_link_id: LinkIDType,
     ) {
-        match (dbg!(self.lie_state), dbg!(&packet.neighbor)) {
+        match (self.lie_state, &packet.neighbor) {
             (LieState::OneWay, _) => (),
             (LieState::TwoWay, None) => (),
             (LieState::TwoWay, Some(neighbor)) => {
@@ -730,7 +738,7 @@ impl LieStateMachine {
     // any chained events will also be processed before the next external event. This is to prevent
     // weird edge cases where an external event may be added between a set of chained events.
     fn push(&mut self, event: LieEvent) {
-        println!("\tPUSH {:?}", event);
+        tracing::trace!(event = event.name(), "PUSH procedure");
         self.chained_event_queue.push_back(event)
     }
 
@@ -992,11 +1000,14 @@ impl ZtpStateMachine {
         let mut lie_events = vec![];
 
         if let Some(event) = self.external_event_queue.pop_front() {
-            println!(
-                "processing external event: {} (in {:?})",
-                event.name(),
-                self.state
-            );
+            let _span = tracing::trace_span!(
+                target: "ZTP_FSM",
+                "process_external_event",
+                queue_type = "external",
+                event = event.name(),
+                state =? self.state
+            )
+            .entered();
             let new_state = self.process_ztp_event(event);
             let events = self.transition_to(new_state);
             lie_events.extend(events);
@@ -1004,11 +1015,14 @@ impl ZtpStateMachine {
 
         // Drain the chained event queue, if an external event caused some events to be pushed.
         while let Some(event) = self.chained_event_queue.pop_front() {
-            println!(
-                "processing chained event: {} (in {:?})",
-                event.name(),
-                self.state
-            );
+            let _span = tracing::trace_span!(
+                target: "ZTP_FSM",
+                "process_external_event",
+                queue_type = "chained",
+                event = event.name(),
+                state =? self.state
+            )
+            .entered();
             let new_state = self.process_ztp_event(event);
             let events = self.transition_to(new_state);
             lie_events.extend(events);
@@ -1021,7 +1035,7 @@ impl ZtpStateMachine {
     fn transition_to(&mut self, new_state: ZtpState) -> Vec<LieEvent> {
         let mut events = vec![];
         if new_state != self.state {
-            println!("transitioning: {:?} -> {:?}", self.state, new_state);
+            tracing::trace!(from =? self.state, to=? new_state, "transitioning");
             if new_state == ZtpState::ComputeBestOffer {
                 // on Entry into ComputeBestOffer: LEVEL_COMPUTE
                 self.level_compute();
@@ -1056,7 +1070,7 @@ impl ZtpStateMachine {
 
     /// Push an external event onto the ZTPEvent queue.
     pub fn push_external_event(&mut self, event: ZtpEvent) {
-        println!("[ZTP] Pushing external event {}", event.name());
+        tracing::trace!(event = event.name(), "pushing external event");
         self.external_event_queue.push_back(event);
     }
 
@@ -1183,6 +1197,7 @@ impl ZtpStateMachine {
     // any chained events will also be processed before the next external event. This is to prevent
     // weird edge cases where an external event may be added between a set of chained events.
     fn push(&mut self, event: ZtpEvent) {
+        tracing::trace!(event = event.name(), "PUSH procedure");
         self.chained_event_queue.push_back(event);
     }
 
@@ -1240,6 +1255,7 @@ impl ZtpStateMachine {
     // Implements the LEVEL_COMPUTE procedure:
     // compute best offered or configured level and HAL/HAT, if anything changed PUSH ComputationDone
     fn level_compute(&mut self) {
+        tracing::trace!("LEVEL_COMPUTE procedure");
         let new_hal = self.compare_offer_results.hal;
         let new_hat = self.compare_offer_results.hat;
 

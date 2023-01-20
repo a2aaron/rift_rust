@@ -44,16 +44,15 @@ impl TopologyDescription {
             for addr in addrs {
                 let result = map.insert(addr.port(), addr);
                 if let Some(old_addr) = result {
-                    println!(
-                        "Overwriting IP address associated with port {}: {} -> {}",
-                        addr.port(),
-                        old_addr.ip(),
-                        addr.ip()
+                    tracing::warn!(
+                        port =% addr.port(),
+                        old_addr =% old_addr.ip(),
+                        new_addr =% addr.ip(),
+                        "overwriting IP address associated with port",
                     )
                 }
             }
         }
-        println!("{:?}", map);
         for shard in &mut self.shards {
             for node in &mut shard.nodes {
                 for interface in &mut node.interfaces {

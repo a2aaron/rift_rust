@@ -5,6 +5,7 @@ use rift_rust::{
     network::{Network, Passivity},
     topology::TopologyDescription,
 };
+use tracing_subscriber::fmt::format;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -20,6 +21,12 @@ struct Args {
 
 fn main() -> Result<(), Box<dyn Error>> {
     std::env::set_var("RUST_BACKTRACE", "1");
+
+    tracing_subscriber::fmt()
+        .event_format(format::format().pretty())
+        .with_max_level(tracing::Level::TRACE)
+        .without_time()
+        .init(); // you are going to loose Subscriber
 
     let args = Args::parse();
     let passivity = match (args.passive, args.non_passive) {
