@@ -42,12 +42,15 @@ pub struct LieStateMachine {
     neighbor: Option<Neighbor>,
     /// The ZTP state machine. Maybe this should go into the Link?
     ztp_fsm: ZtpStateMachine,
-    /// The time at which the most recent valid LIE was received.
-    last_valid_lie: Option<Instant>,
+    /// A tuple containing the time at which the most recent valid LIE was received along with the
+    /// holdtime that LIE packet had. This value is updated each time a valid LIE is received on the
+    /// link (see [LieStateMachine::process_lie] for more detail). This controls how long the LIE
+    /// is considered to be alive before it "expires", which in turn determines how long the LIE FSM
+    /// will remaining in TwoWay or ThreeWay before automatically PUSHing HoldtimeExpired and reverting
+    /// to OneWay..
+    last_valid_lie: Option<(Instant, PacketHeader, LIEPacket)>,
     /// The time at which the multiple neighbors timer was started
     multiple_neighbors_start: Option<Instant>,
-    /// The time to remain in TwoWay before sending HoldtimeExpired
-    hold_time: Duration,
 }
 
 impl LieStateMachine {
@@ -64,7 +67,6 @@ impl LieStateMachine {
             ztp_fsm: ZtpStateMachine::new(configured_level, LeafFlags),
             last_valid_lie: None,
             multiple_neighbors_start: None,
-            hold_time: Duration::from_secs(DEFAULT_LIE_HOLDTIME as u64),
         }
     }
 
@@ -267,7 +269,7 @@ impl LieStateMachine {
                     // PUSH SendLie event, if last valid LIE was received more than `holdtime` ago
                     // as advertised by neighbor then PUSH HoldtimeExpired event
                     self.push(LieEvent::SendLie);
-                    if self.should_expire_holdtime() {
+                    if self.is_lie_expired() {
                         self.push(LieEvent::HoldtimeExpired);
                     }
                     LieState::TwoWay
@@ -327,7 +329,7 @@ impl LieStateMachine {
                 LieEvent::TimerTick => {
                     // PUSH SendLie event, if last valid LIE was received more than `holdtime` ago as advertised by neighbor then PUSH HoldtimeExpired event
                     self.push(LieEvent::SendLie);
-                    if self.should_expire_holdtime() {
+                    if self.is_lie_expired() {
                         self.push(LieEvent::HoldtimeExpired);
                     }
                     LieState::ThreeWay
@@ -509,7 +511,7 @@ impl LieStateMachine {
         // ]
         // The spec, when defining a "valid LIE" and says "passing all checks for adjacency formation
         // while disregarding all clauses involving level values" (4.2.7.1, Valid Offered Level (VOL))
-        self.last_valid_lie = Some(Instant::now());
+        self.last_valid_lie = Some((Instant::now(), lie_header.clone(), lie_packet.clone()));
 
         // 3. if LIE has undefined level OR
         //       this node's level is undefined OR
@@ -751,10 +753,14 @@ impl LieStateMachine {
     }
 
     // returns true if "if last valid LIE was received more than `holdtime` ago as advertised by neighbor"
-    fn should_expire_holdtime(&self) -> bool {
-        match self.last_valid_lie {
-            Some(last_valid_lie) => Instant::now().duration_since(last_valid_lie) > self.hold_time,
-            None => true, // No prior valid LIE to compare against, so always expire
+    fn is_lie_expired(&self) -> bool {
+        match &self.last_valid_lie {
+            Some((recv_time, _, lie_packet)) => {
+                let holdtime = Duration::from_secs(lie_packet.holdtime as u64);
+                let receive_time = Instant::now().duration_since(*recv_time);
+                receive_time > holdtime
+            }
+            None => true, // No prior valid LIE to compare against, so always considere expired
         }
     }
 }
