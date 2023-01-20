@@ -743,7 +743,6 @@ impl LieStateMachine {
     // CLEANUP: neighbor MUST be reset to unknown
     fn cleanup(&mut self) {
         self.neighbor = None;
-        self.last_valid_lie = None;
     }
 
     // implements the "PUSH Event" procedure.
