@@ -99,5 +99,9 @@ What the heck is "NeighborChangedBFDCapability"? This doesn't appear in the list
 
 - More clarity on what counts as a "valid LIE". The spec says "passing all checks for adjacency formation while disregarding all clauses involving level values". It would be nice to know explicitly, which checks should be considered or not considered for a LIE to be valid (is this bullet points 1 through 4 for when the spec says "A node MUST form a ThreeWay adjacency (or in other words consider the neighbor "valid" and hence reflecting it) if and only if the following first order logic conditions are satisfied on a LIE packet as specified by the `LIEPacket` schema element and received on a link" at 4.2.2?)
 
+- ZTP FSM diagram contains two Enter arrows, but initial state is defined as ComputeBestOffer.
+
+- In the definition for PURGE_OFFERS, "COMPARE_OFFERS" is spelled "COMPARE OFFERS" (the underscore is missing)
+
 # Rift Python
 - two_by_two_by_two_ztp.yaml has `level: superspine`. However, this does not appear to be a real named level value, and attempting to get rift-python to parse the file results in an error.

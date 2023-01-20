@@ -1,3 +1,5 @@
+# LIE FSM Actions
+
 // in one way
 on TimerTick                  -> OneWay: PUSH SendLie event
 on UnacceptableHeader         -> OneWay: no action
@@ -79,3 +81,42 @@ on UnacceptableHeader           -> MultipleNeighborsWait: no action
 
 // other
 on Entry into OneWay: CLEANUP
+
+# ZTP FSM Actions
+
+// in HoldingDown
+on ChangeLocalConfiguredLevel      -> ComputeBestOffer: store configured level
+on BetterHAT                       -> HoldingDown: no action
+on ShortTic                        -> HoldingDown: remove expired offers and if holddown timer expired PUSH_EVENT HoldDownExpired
+on NeighborOffer                   -> HoldingDown: PROCESS_OFFER
+on ComputationDone                 -> HoldingDown: no action
+on BetterHAL                       -> HoldingDown: no action
+on LostHAT                         -> HoldingDown: no action
+on LostHAL                         -> HoldingDown: no action
+on HoldDownExpired                 -> ComputeBestOffer: PURGE_OFFERS
+on ChangeLocalHierarchyIndications -> ComputeBestOffer: store leaf flags
+
+// in ComputeBestOffer
+on LostHAT                         -> ComputeBestOffer: LEVEL_COMPUTE
+on NeighborOffer                   -> ComputeBestOffer: PROCESS_OFFER
+on BetterHAT                       -> ComputeBestOffer: LEVEL_COMPUTE
+on ChangeLocalHierarchyIndications -> ComputeBestOffer: store leaf flags and LEVEL_COMPUTE
+on LostHAL                         -> HoldingDown: if any southbound adjacencies present then update holddown timer to normal duration else fire holddown timer immediately
+on ShortTic                        -> ComputeBestOffer: remove expired offers
+on ComputationDone                 -> UpdatingClients: no action
+on ChangeLocalConfiguredLevel      -> ComputeBestOffer: store configured level and LEVEL_COMPUTE
+on BetterHAL                       -> ComputeBestOffer: LEVEL_COMPUTE
+
+// in UpdatingClients
+on ShortTic                        -> UpdatingClients: remove expired offers
+on LostHAL                         -> HoldingDown: if any southbound adjacencies present then update holddown timer to normal duration else fire holddown timer immediately
+on BetterHAT                       -> ComputeBestOffer: no action
+on BetterHAL                       -> ComputeBestOffer: no action
+on ChangeLocalConfiguredLevel      -> ComputeBestOffer: store configured level
+on ChangeLocalHierarchyIndications -> ComputeBestOffer: store leaf flags
+on NeighborOffer                   -> UpdatingClients: PROCESS_OFFER
+on LostHAT                         -> ComputeBestOffer: no action
+
+// other
+on Entry into ComputeBestOffer: LEVEL_COMPUTE
+on Entry into UpdatingClients: update all LIE FSMs with computation results

@@ -61,7 +61,7 @@ impl LieStateMachine {
             highest_available_level: Level::Undefined,
             highest_adjacency_threeway: Level::Undefined,
             neighbor: None,
-            ztp_fsm: ZtpStateMachine,
+            ztp_fsm: ZtpStateMachine::new(),
             last_valid_lie: None,
             multiple_neighbors_start: None,
             hold_time: Duration::from_secs(DEFAULT_LIE_HOLDTIME as u64),
@@ -883,11 +883,329 @@ impl From<Level> for Option<common::LevelType> {
 #[derive(Debug, Clone, Copy)]
 pub struct HALS;
 
-struct ZtpStateMachine;
+pub struct ZtpStateMachine {
+    state: ZtpState,
+    external_event_queue: VecDeque<ZtpEvent>,
+    chained_event_queue: VecDeque<ZtpEvent>,
+}
 
 impl ZtpStateMachine {
+    pub fn new() -> ZtpStateMachine {
+        ZtpStateMachine {
+            state: ZtpState::ComputeBestOffer,
+            external_event_queue: VecDeque::new(),
+            chained_event_queue: VecDeque::new(),
+        }
+    }
+
+    /// Process all external events, if there exist any events in the event queue. Note that this
+    /// also processes any events pushed by the PUSH procedure, so the `chained_event_queue` will
+    /// be empty both before and after this call.
+    pub fn process_external_events(&mut self) {
+        assert!(self.chained_event_queue.is_empty());
+        while !self.external_event_queue.is_empty() {
+            self.process_external_event();
+        }
+        assert!(self.chained_event_queue.is_empty());
+    }
+
+    /// Process a single external event, if there exists an event in the event queue. Note that this
+    /// also processes any events pushed by the PUSH procedure, so the `chained_event_queue` will
+    /// be empty both before and after this call.
+    fn process_external_event(&mut self) {
+        assert!(self.chained_event_queue.is_empty());
+        if let Some(event) = self.external_event_queue.pop_front() {
+            println!(
+                "processing external event: {} (in {:?})",
+                event.name(),
+                self.state
+            );
+            let new_state = self.process_ztp_event(event);
+            // on Entry into ComputeBestOffer: LEVEL_COMPUTE
+            // on Entry into UpdatingClients: update all LIE FSMs with computation results
+            if new_state == ZtpState::ComputeBestOffer {
+                self.level_compute();
+            } else if new_state == ZtpState::UpdatingClients {
+                self.update_lie_fsm();
+            }
+        }
+
+        // Drain the chained event queue, if an external event caused some events to be pushed.
+        while let Some(event) = self.chained_event_queue.pop_front() {
+            println!(
+                "processing chained event: {} (in {:?})",
+                event.name(),
+                self.state
+            );
+            let new_state = self.process_ztp_event(event);
+            if new_state != self.state {
+                println!("transitioning: {:?} -> {:?}", self.state, new_state);
+                // on Entry into ComputeBestOffer: LEVEL_COMPUTE
+                // on Entry into UpdatingClients: update all LIE FSMs with computation results
+                if new_state == ZtpState::ComputeBestOffer {
+                    self.level_compute();
+                } else if new_state == ZtpState::UpdatingClients {
+                    self.update_lie_fsm();
+                }
+                self.state = new_state;
+            }
+        }
+    }
+
+    /// Push an external event onto the ZTPEvent queue.
+    pub fn push_external_event(&mut self, event: ZtpEvent) {
+        println!("[ZTP] Pushing external event {}", event.name());
+        self.external_event_queue.push_back(event);
+    }
+
     fn send_ztp_offer(&self) {
         println!("TODO: send_ztp_offer");
+    }
+
+    fn process_ztp_event(&mut self, event: ZtpEvent) -> ZtpState {
+        match self.state {
+            ZtpState::ComputeBestOffer => match event {
+                ZtpEvent::ChangeLocalConfiguredLevel => {
+                    // store configured level
+                    self.store_configured_level();
+                    ZtpState::ComputeBestOffer
+                }
+                ZtpEvent::BetterHAT => ZtpState::HoldingDown,
+                ZtpEvent::ShortTic => {
+                    // remove expired offers and if holddown timer expired PUSH_EVENT HoldDownExpired
+                    self.remove_expired_offers();
+                    if self.holddown_timer_expired() {
+                        self.push(ZtpEvent::HoldDownExpired);
+                    }
+                    ZtpState::HoldingDown
+                }
+                ZtpEvent::NeighborOffer => {
+                    // PROCESS_OFFER
+                    self.process_offer();
+                    ZtpState::HoldingDown
+                }
+                ZtpEvent::ComputationDone => ZtpState::HoldingDown,
+                ZtpEvent::BetterHAL => ZtpState::HoldingDown,
+                ZtpEvent::LostHAT => ZtpState::HoldingDown,
+                ZtpEvent::LostHAL => ZtpState::HoldingDown,
+                ZtpEvent::HoldDownExpired => {
+                    // PURGE_OFFERS
+                    self.purge_offers();
+                    ZtpState::ComputeBestOffer
+                }
+                ZtpEvent::ChangeLocalHierarchyIndications => {
+                    // store leaf flags
+                    self.store_leaf_flags();
+                    ZtpState::ComputeBestOffer
+                }
+            },
+            ZtpState::HoldingDown => match event {
+                ZtpEvent::LostHAT => {
+                    self.level_compute(); // LEVEL_COMPUTE
+                    ZtpState::ComputeBestOffer
+                }
+                ZtpEvent::NeighborOffer => {
+                    self.process_offer(); // PROCESS_OFFER
+                    ZtpState::ComputeBestOffer
+                }
+                ZtpEvent::BetterHAT => {
+                    self.level_compute(); // LEVEL_COMPUTE
+                    ZtpState::ComputeBestOffer
+                }
+                ZtpEvent::ChangeLocalHierarchyIndications => {
+                    // store leaf flags and LEVEL_COMPUTE
+                    self.store_leaf_flags();
+                    self.level_compute();
+                    ZtpState::ComputeBestOffer
+                }
+                ZtpEvent::LostHAL => {
+                    // if any southbound adjacencies present then update holddown timer
+                    // to normal duration else fire holddown timer immediately
+                    self.check_sounthbound_adjacencies();
+                    ZtpState::HoldingDown
+                }
+                ZtpEvent::ShortTic => {
+                    self.remove_expired_offers(); // remove expired offers
+                    ZtpState::ComputeBestOffer
+                }
+                ZtpEvent::ComputationDone => ZtpState::UpdatingClients,
+                ZtpEvent::ChangeLocalConfiguredLevel => {
+                    // store configured level and LEVEL_COMPUTE
+                    self.store_configured_level();
+                    self.level_compute();
+                    ZtpState::ComputeBestOffer
+                }
+                ZtpEvent::BetterHAL => {
+                    self.level_compute(); // LEVEL_COMPUTE
+                    ZtpState::ComputeBestOffer
+                }
+                ZtpEvent::HoldDownExpired => {
+                    unreachable!("event {} cannot occur in {:?}", event.name(), self.state)
+                }
+            },
+            ZtpState::UpdatingClients => match event {
+                ZtpEvent::ShortTic => {
+                    self.remove_expired_offers(); // remove expired offers
+                    ZtpState::UpdatingClients
+                }
+                ZtpEvent::LostHAL => {
+                    // if any southbound adjacencies present then update holddown timer
+                    // to normal duration else fire holddown timer immediately
+                    self.check_sounthbound_adjacencies();
+                    ZtpState::HoldingDown
+                }
+                ZtpEvent::BetterHAT => ZtpState::ComputeBestOffer,
+                ZtpEvent::BetterHAL => ZtpState::ComputeBestOffer,
+                ZtpEvent::ChangeLocalConfiguredLevel => {
+                    self.store_configured_level(); // store configured level
+                    ZtpState::ComputeBestOffer
+                }
+                ZtpEvent::ChangeLocalHierarchyIndications => {
+                    self.store_leaf_flags(); // store leaf flags
+                    ZtpState::ComputeBestOffer
+                }
+                ZtpEvent::NeighborOffer => {
+                    self.process_offer(); // PROCESS_OFFER
+                    ZtpState::UpdatingClients
+                }
+                ZtpEvent::LostHAT => ZtpState::ComputeBestOffer,
+                ZtpEvent::ComputationDone => {
+                    unreachable!("event {} cannot occur in {:?}", event.name(), self.state)
+                }
+                ZtpEvent::HoldDownExpired => {
+                    unreachable!("event {} cannot occur in {:?}", event.name(), self.state)
+                }
+            },
+        }
+    }
+
+    // implements the "PUSH Event" procedure.
+    // PUSH Event: queues an event to be executed by the FSM upon exit of this action
+    // Note that this adds events to the `chained_event_queue`. When processing an external event,
+    // any chained events will also be processed before the next external event. This is to prevent
+    // weird edge cases where an external event may be added between a set of chained events.
+    fn push(&mut self, event: ZtpEvent) {
+        self.chained_event_queue.push_back(event);
+    }
+
+    // Implements the COMPARE_OFFERS procedure:
+    // checks whether based on current offers and held last results the events
+    //BetterHAL/LostHAL/BetterHAT/LostHAT are necessary and returns them
+    fn compare_offers(&mut self) {
+        todo!()
+    }
+
+    // Implements the UPDATE_OFFER procedure:
+    // store current offer with adjacency holdtime as lifetime and COMPARE_OFFERS,
+    // then PUSH according events
+    fn update_offer(&mut self) {
+        todo!()
+    }
+
+    // Implements the LEVEL_COMPUTE procedure:
+    // compute best offered or configured level and HAL/HAT, if anything changed PUSH ComputationDone
+    fn level_compute(&mut self) {
+        todo!()
+    }
+
+    // Implements the REMOVE_OFFER procedure:
+    // remote the according offer and COMPARE_OFFERS, PUSH according events
+    fn remove_offer(&mut self) {
+        todo!()
+    }
+
+    // Implements the PURGE_OFFERS procedure:
+    // REMOVE_OFFER for all held offers, COMPARE_OFFERS, PUSH according events
+    fn purge_offers(&mut self) {
+        todo!()
+    }
+
+    // Implements the PROCESS_OFFER procedure:
+    // 1. if no level offered then REMOVE_OFFER
+    // 2. else
+    //    1. if offered level > leaf then UPDATE_OFFER
+    //    2. else REMOVE_OFFER
+    fn process_offer(&mut self) {
+        todo!()
+    }
+
+    // implements "store leaf flags"
+    fn store_leaf_flags(&mut self) {
+        todo!()
+    }
+
+    // implements "store configured level"
+    fn store_configured_level(&mut self) {
+        todo!()
+    }
+
+    // implements "remove expired offers"
+    fn remove_expired_offers(&mut self) {
+        todo!()
+    }
+
+    // returns true if "holddown timer expired"
+    fn holddown_timer_expired(&self) -> bool {
+        todo!()
+    }
+
+    // implements "if any southbound adjacencies present then update holddown timer
+    // to normal duration else fire holddown timer immediately"
+    fn check_sounthbound_adjacencies(&mut self) {
+        todo!()
+    }
+
+    fn update_lie_fsm(&self) {
+        todo!()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ZtpState {
+    ComputeBestOffer,
+    HoldingDown,
+    UpdatingClients,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum ZtpEvent {
+    // node locally configured with new leaf flags.
+    ChangeLocalHierarchyIndications,
+    // node locally configured with a defined level
+    ChangeLocalConfiguredLevel,
+    // a new neighbor offer with optional level and neighbor state.
+    NeighborOffer,
+    // better HAL computed internally.
+    BetterHAL,
+    // better HAT computed internally.
+    BetterHAT,
+    // lost last HAL in computation.
+    LostHAL,
+    // lost HAT in computation.
+    LostHAT,
+    // computation performed.
+    ComputationDone,
+    // holddown timer expired.
+    HoldDownExpired,
+    // one second timer tic, i.e. the event is generated for FSM by some external entity once a second.
+    // To be ignored if transition does not exist.
+    ShortTic,
+}
+
+impl ZtpEvent {
+    fn name(&self) -> &str {
+        match self {
+            ZtpEvent::ChangeLocalHierarchyIndications => "ChangeLocalHierarchyIndications",
+            ZtpEvent::ChangeLocalConfiguredLevel => "ChangeLocalConfiguredLevel",
+            ZtpEvent::NeighborOffer => "NeighborOffer",
+            ZtpEvent::BetterHAL => "BetterHAL",
+            ZtpEvent::BetterHAT => "BetterHAT",
+            ZtpEvent::LostHAL => "LostHAL",
+            ZtpEvent::LostHAT => "LostHAT",
+            ZtpEvent::ComputationDone => "ComputationDone",
+            ZtpEvent::HoldDownExpired => "HoldDownExpired",
+            ZtpEvent::ShortTic => "ShortTic",
+        }
     }
 }
 
