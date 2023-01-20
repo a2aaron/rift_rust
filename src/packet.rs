@@ -48,7 +48,14 @@ pub fn serialize(
 pub fn parse_and_validate<'a>(
     bytes: &'a [u8],
     keystore: &SecretKeyStore,
-) -> Result<ProtocolPacket, ParsingError> {
+) -> Result<
+    (
+        OuterSecurityEnvelopeHeader<'a>,
+        Option<TIEOriginSecurityEnvelopeHeader<'a>>,
+        ProtocolPacket,
+    ),
+    ParsingError,
+> {
     let (outer_security_header, bytes, payload_with_nonces) =
         OuterSecurityEnvelopeHeader::parse_packet(bytes)?;
 
@@ -56,8 +63,8 @@ pub fn parse_and_validate<'a>(
         return Err(ParsingError::InvalidOuterEnvelope);
     }
 
-    let bytes = if outer_security_header.remaining_tie_lifetime.is_none() {
-        bytes
+    let (tie_header, bytes) = if outer_security_header.remaining_tie_lifetime.is_none() {
+        (None, bytes)
     } else {
         let (header, bytes) = TIEOriginSecurityEnvelopeHeader::parse_packet(bytes)?;
 
@@ -65,7 +72,7 @@ pub fn parse_and_validate<'a>(
             return Err(ParsingError::InvalidOuterEnvelope);
         }
 
-        bytes
+        (Some(header), bytes)
     };
 
     // TODO: Parsing is done using `thrift`, but it seems that `thrift` does panic on some inputs.
@@ -79,7 +86,7 @@ pub fn parse_and_validate<'a>(
     let protocol_packet = ProtocolPacket::read_from_in_protocol(&mut binary_protocol)
         .map_err(ParsingError::ThriftError)?;
 
-    Ok(protocol_packet)
+    Ok((outer_security_header, tie_header, protocol_packet))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

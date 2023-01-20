@@ -189,7 +189,6 @@ pub struct LinkSocket {
     weak_nonce_local: Nonce,
     /// The weak remote nonce value when sending out a LIE. This is used for computation of the
     /// security envelope. This value is set whenever a packet is received on this LinkSocket.
-    /// TODO: Set the weak nonce remote value.
     weak_nonce_remote: Nonce,
 }
 
@@ -250,14 +249,17 @@ impl LinkSocket {
         })
     }
 
-    pub fn recv_packet(&self, keys: &SecretKeyStore) -> RecvPacketResult {
-        // TODO: set weak_nonce_remote based on packet data?
+    pub fn recv_packet(&mut self, keys: &SecretKeyStore) -> RecvPacketResult {
         let mut bytes: Vec<u8> = vec![0; common::DEFAULT_MTU_SIZE as usize];
         match self.lie_rx_socket.recv_from(&mut bytes) {
             Ok((length, address)) => {
                 bytes.resize(length, 0u8);
                 match packet::parse_and_validate(&bytes, keys) {
-                    Ok(packet) => RecvPacketResult::Packet { packet, address },
+                    Ok((outer_header, _tie_header, packet)) => {
+                        // We set our remote to their local.
+                        self.weak_nonce_remote = outer_header.weak_nonce_local;
+                        RecvPacketResult::Packet { packet, address }
+                    }
                     Err(err) => RecvPacketResult::Err(err.into()),
                 }
             }
