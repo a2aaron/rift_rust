@@ -14,6 +14,7 @@ use crate::packet::SecretKeyStore;
 // 224.0.0.120
 const DEFAULT_LIE_IPV4_MCAST_ADDRESS: Ipv4Addr = Ipv4Addr::new(224, 0, 0, 120);
 // FF02::A1F7
+#[allow(dead_code)]
 const DEFAULT_LIE_IPV6_MCAST_ADDRESS: Ipv6Addr = Ipv6Addr::new(0xFF02, 0, 0, 0, 0, 0, 0, 0xA1F7);
 
 /// A topology description which defines some aspects of the RIFT network, including:

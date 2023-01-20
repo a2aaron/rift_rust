@@ -1,10 +1,16 @@
-use std::{collections::VecDeque, io, net::IpAddr};
+use std::{
+    collections::VecDeque,
+    io,
+    net::IpAddr,
+    time::{Duration, Instant},
+};
 
 use crate::{
     models::{
         common::{
             self, LinkIDType, MTUSizeType, SystemIDType, UDPPortType, DEFAULT_BANDWIDTH,
             DEFAULT_LIE_HOLDTIME, ILLEGAL_SYSTEM_I_D, LEAF_LEVEL,
+            MULTIPLE_NEIGHBORS_LIE_HOLDTIME_MULTIPLER,
         },
         encoding::{
             self, LIEPacket, PacketHeader, ProtocolPacket, PROTOCOL_MAJOR_VERSION,
@@ -36,6 +42,12 @@ pub struct LieStateMachine {
     neighbor: Option<Neighbor>,
     /// The ZTP state machine. Maybe this should go into the Link?
     ztp_fsm: ZtpStateMachine,
+    /// The time at which the most recent valid LIE was received.
+    last_valid_lie: Option<Instant>,
+    /// The time at which the multiple neighbors timer was started
+    multiple_neighbors_start: Option<Instant>,
+    /// The time to remain in TwoWay before sending HoldtimeExpired
+    hold_time: Duration,
 }
 
 impl LieStateMachine {
@@ -50,6 +62,9 @@ impl LieStateMachine {
             highest_adjacency_threeway: Level::Undefined,
             neighbor: None,
             ztp_fsm: ZtpStateMachine,
+            last_valid_lie: None,
+            multiple_neighbors_start: None,
+            hold_time: Duration::from_secs(DEFAULT_LIE_HOLDTIME as u64),
         }
     }
 
@@ -228,7 +243,10 @@ impl LieStateMachine {
                 LieEvent::TimerTick => {
                     // PUSH SendLie event, if last valid LIE was received more than `holdtime` ago
                     // as advertised by neighbor then PUSH HoldtimeExpired event
-                    todo!();
+                    self.push(LieEvent::SendLie);
+                    if self.should_expire_holdtime() {
+                        self.push(LieEvent::HoldtimeExpired);
+                    }
                     LieState::TwoWay
                 }
                 LieEvent::NeighborChangedLevel => LieState::OneWay,
@@ -285,7 +303,10 @@ impl LieStateMachine {
                 }
                 LieEvent::TimerTick => {
                     // PUSH SendLie event, if last valid LIE was received more than `holdtime` ago as advertised by neighbor then PUSH HoldtimeExpired event
-                    todo!();
+                    self.push(LieEvent::SendLie);
+                    if self.should_expire_holdtime() {
+                        self.push(LieEvent::HoldtimeExpired);
+                    }
                     LieState::ThreeWay
                 }
                 LieEvent::HATChanged(new_hat) => {
@@ -380,7 +401,15 @@ impl LieStateMachine {
                 LieEvent::ValidReflection => LieState::MultipleNeighborsWait,
                 LieEvent::TimerTick => {
                     // check MultipleNeighbors timer, if timer expired PUSH MultipleNeighborsDone
-                    todo!();
+                    let time_since_start =
+                        Instant::now().duration_since(self.multiple_neighbors_start.unwrap());
+                    let timer_length = Duration::from_secs(
+                        MULTIPLE_NEIGHBORS_LIE_HOLDTIME_MULTIPLER as u64
+                            * DEFAULT_LIE_HOLDTIME as u64,
+                    );
+                    if time_since_start > timer_length {
+                        self.push(LieEvent::MultipleNeighborsDone);
+                    };
                     LieState::MultipleNeighborsWait
                 }
                 LieEvent::UnacceptableHeader => LieState::MultipleNeighborsWait,
@@ -419,7 +448,7 @@ impl LieStateMachine {
         let lie_level: Level = lie_header.level.into();
 
         // 1. if LIE has major version not equal to this node's *or*
-        //       system ID equal to this node's system IDor `IllegalSystemID`
+        //       system ID equal to this node's system ID or `IllegalSystemID`
         //    then CLEANUP
         if lie_header.major_version != PROTOCOL_MAJOR_VERSION
             || lie_header.sender == system_id.get()
@@ -437,6 +466,27 @@ impl LieStateMachine {
             self.push(LieEvent::MTUMismatch);
             return;
         }
+
+        // At this point, the LIE packet is considered valid. Section 4.2.2 defines a "valid" neighbor as one which
+        // satisfies the following conditions:
+        // 1. the neighboring node is running the same major schema version as indicated in the
+        //    `major_version` element in `PacketHeader` *and*
+        // 2. the neighboring node uses a valid System ID (i.e. value different from `IllegalSystemID`)
+        //    in `sender` element in `PacketHeader` *and*
+        // 3. the neighboring node uses a different System ID than the node itself
+        // 4. the advertised MTUs in `LiePacket` element match on both sides *and*
+        // 5. both nodes advertise defined level values in `level` element in `PacketHeader` *and*
+        // 6. [
+        //      i) the node is at `leaf_level` value and has no ThreeWay adjacencies already to nodes
+        //         at Highest Adjacency ThreeWay (HAT as defined later in Section 4.2.7.1) with level
+        //         different than the adjacent node *or
+        //      ii) the node is not at `leaf_level` value and the neighboring node is at `leaf_level` value *or*
+        //      iii) both nodes are at `leaf_level` values *and* both indicate support for Section 4.3.9 *or*
+        //      iv) neither node is at `leaf_level` value and the neighboring node is at most one level difference away
+        // ]
+        // The spec, when defining a "valid LIE" and says "passing all checks for adjacency formation
+        // while disregarding all clauses involving level values" (4.2.7.1, Valid Offered Level (VOL))
+        self.last_valid_lie = Some(Instant::now());
 
         // 3. if LIE has undefined level OR
         //       this node's level is undefined OR
@@ -668,12 +718,20 @@ impl LieStateMachine {
 
     // implements "start multiple neighbors timer with interval `multiple_neighbors_lie_holdtime_multipler` * `default_lie_holdtime`"
     fn start_multiple_neighbors_timer(&mut self) {
-        todo!()
+        self.multiple_neighbors_start = Some(Instant::now())
     }
 
     // implements "update `you_are_flood_repeater` LIE elements based on flood leader election results"
     fn update_you_are_flood_repeater(&mut self) {
         todo!()
+    }
+
+    // returns true if "if last valid LIE was received more than `holdtime` ago as advertised by neighbor"
+    fn should_expire_holdtime(&self) -> bool {
+        match self.last_valid_lie {
+            Some(last_valid_lie) => Instant::now().duration_since(last_valid_lie) > self.hold_time,
+            None => true, // No prior valid LIE to compare against, so always expire
+        }
     }
 }
 
