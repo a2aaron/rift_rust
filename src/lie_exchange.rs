@@ -1211,7 +1211,7 @@ impl ZtpStateMachine {
             events.push(ZtpEvent::LostHAT);
         }
 
-        todo!()
+        events
     }
 
     // Implements the UPDATE_OFFER procedure:
