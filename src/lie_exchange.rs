@@ -777,6 +777,7 @@ impl LieStateMachine {
             let offer = Offer {
                 level,
                 system_id: header.sender,
+                state: self.lie_state,
             };
             ztp_fsm.push_external_event(ZtpEvent::NeighborOffer(offer))
         }
@@ -792,7 +793,7 @@ struct Neighbor {
     local_link_id: LinkIDType,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub enum LieState {
     OneWay,
     TwoWay,
@@ -878,7 +879,7 @@ impl LieEvent {
 /// A numerical level. A level of "Undefined" typically means that the level was either not specified
 /// (and hence will be inferred by ZTP) or it is not known yet. See also: [topology::Level]
 // TODO: are levels only in 0-24 range? if so, maybe enforce this?
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Level {
     Undefined,
     Value(u8),
@@ -912,8 +913,10 @@ pub struct ZtpStateMachine {
     chained_event_queue: VecDeque<ZtpEvent>,
     configured_level: Level,
     leaf_flags: LeafFlags,
-    offers: HashMap<Offer, Instant>,
+    offers: HashMap<SystemIDType, (Offer, Instant)>,
     holddown_timer_start: Option<Instant>,
+    highest_available_level: Level,
+    highest_adjacency_threeway: Level,
 }
 
 impl ZtpStateMachine {
@@ -926,6 +929,8 @@ impl ZtpStateMachine {
             leaf_flags,
             offers: HashMap::new(),
             holddown_timer_start: None,
+            highest_available_level: Level::Undefined,
+            highest_adjacency_threeway: Level::Undefined,
         }
     }
 
@@ -1134,16 +1139,48 @@ impl ZtpStateMachine {
     // checks whether based on current offers and held last results the events
     // BetterHAL/LostHAL/BetterHAT/LostHAT are necessary and returns them
     fn compare_offers(&mut self) -> Vec<ZtpEvent> {
+        let mut events = vec![];
+
+        let best_offer = self.offers.values().map(|x| x.0.level).max();
+        let best_offer_hat = self
+            .offers
+            .values()
+            .filter_map(|x| {
+                if x.0.state == LieState::ThreeWay {
+                    Some(x.0.level)
+                } else {
+                    None
+                }
+            })
+            .max();
+
+        if let Some(hal) = best_offer {
+            if self.highest_available_level != hal {
+                events.push(ZtpEvent::BetterHAL);
+                self.highest_available_level = hal;
+            }
+        } else {
+            events.push(ZtpEvent::LostHAL);
+        }
+
+        if let Some(hat) = best_offer_hat {
+            if self.highest_adjacency_threeway != hat {
+                events.push(ZtpEvent::BetterHAT);
+                self.highest_adjacency_threeway = hat;
+            }
+        } else {
+            events.push(ZtpEvent::LostHAT);
+        }
+
         todo!()
     }
 
     // Implements the UPDATE_OFFER procedure:
     // store current offer with adjacency holdtime as lifetime and COMPARE_OFFERS,
     // then PUSH according events
-    fn update_offer(&mut self, offer: &Offer) {
-        let lifetime = self.offers.get_mut(&offer).unwrap();
-        // TODO: what does "adjacency holdtime" mean?
-        *lifetime = Instant::now();
+    // TODO: what does "adjacency holdtime" mean?
+    fn update_offer(&mut self, offer: Offer) {
+        self.offers.insert(offer.system_id, (offer, Instant::now()));
 
         for event in self.compare_offers() {
             self.push(event);
@@ -1159,7 +1196,7 @@ impl ZtpStateMachine {
     // Implements the REMOVE_OFFER procedure:
     // remote the according offer and COMPARE_OFFERS, PUSH according events
     fn remove_offer(&mut self, offer: &Offer) {
-        self.offers.remove(&offer).unwrap();
+        self.offers.remove(&offer.system_id).unwrap();
 
         for event in self.compare_offers() {
             self.push(event);
@@ -1188,7 +1225,7 @@ impl ZtpStateMachine {
             Level::Undefined => self.remove_offer(&offer),
             Level::Value(level) => {
                 if level > LEAF_LEVEL as u8 {
-                    self.update_offer(&offer);
+                    self.update_offer(offer);
                 } else {
                     self.remove_offer(&offer);
                 }
@@ -1288,6 +1325,7 @@ impl ZtpEvent {
 pub struct Offer {
     level: Level,
     system_id: SystemIDType,
+    state: LieState,
 }
 
 #[derive(Debug, Clone)]
