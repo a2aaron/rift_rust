@@ -163,7 +163,10 @@ impl LieStateMachine {
                     self.push(LieEvent::SendLie); // PUSH SendLie
                     LieState::TwoWay
                 }
-                LieEvent::HoldtimeExpired => LieState::OneWay,
+                LieEvent::HoldtimeExpired => {
+                    LieStateMachine::expire_offer(ztp_fsm, node_info.system_id);
+                    LieState::OneWay
+                }
                 LieEvent::HALSChanged(new_hals) => {
                     self.store_hals(new_hals); // store HALS
                     LieState::OneWay
@@ -235,7 +238,10 @@ impl LieStateMachine {
                     self.send_offer(ztp_fsm); // send offer to ZTP FSM
                     LieState::TwoWay
                 }
-                LieEvent::HoldtimeExpired => LieState::OneWay,
+                LieEvent::HoldtimeExpired => {
+                    LieStateMachine::expire_offer(ztp_fsm, node_info.system_id);
+                    LieState::OneWay
+                }
                 LieEvent::MTUMismatch => LieState::OneWay,
                 LieEvent::UnacceptableHeader => LieState::OneWay,
                 LieEvent::ValidReflection => LieState::ThreeWay,
@@ -305,7 +311,10 @@ impl LieStateMachine {
             LieState::ThreeWay => match event {
                 LieEvent::NeighborChangedAddress => LieState::OneWay,
                 LieEvent::ValidReflection => LieState::ThreeWay,
-                LieEvent::HoldtimeExpired => LieState::OneWay,
+                LieEvent::HoldtimeExpired => {
+                    LieStateMachine::expire_offer(ztp_fsm, node_info.system_id);
+                    LieState::OneWay
+                }
                 LieEvent::UnacceptableHeader => LieState::OneWay,
                 LieEvent::NeighborDroppedReflection => LieState::TwoWay,
                 LieEvent::HALChanged(new_hal) => {
@@ -383,7 +392,10 @@ impl LieStateMachine {
                 ),
             },
             LieState::MultipleNeighborsWait => match event {
-                LieEvent::HoldtimeExpired => LieState::MultipleNeighborsWait,
+                LieEvent::HoldtimeExpired => {
+                    LieStateMachine::expire_offer(ztp_fsm, node_info.system_id);
+                    LieState::MultipleNeighborsWait
+                }
                 LieEvent::LieRcvd(_, _, _) => LieState::MultipleNeighborsWait,
                 LieEvent::NeighborDroppedReflection => LieState::MultipleNeighborsWait,
                 LieEvent::MTUMismatch => LieState::MultipleNeighborsWait,
@@ -778,9 +790,15 @@ impl LieStateMachine {
                 level,
                 system_id: header.sender,
                 state: self.lie_state,
+                expired: false,
             };
             ztp_fsm.push_external_event(ZtpEvent::NeighborOffer(offer))
         }
+    }
+
+    /// Expire this link's ZTP offer.
+    fn expire_offer(ztp_fsm: &mut ZtpStateMachine, system_id: SystemID) {
+        ztp_fsm.expire_offer_by_id(system_id);
     }
 }
 
@@ -1245,7 +1263,7 @@ impl ZtpStateMachine {
 
     // implements "remove expired offers"
     fn remove_expired_offers(&mut self) {
-        todo!()
+        self.offers.retain(|_, (offer, _)| !offer.expired);
     }
 
     // returns true if "holddown timer expired"
@@ -1269,6 +1287,18 @@ impl ZtpStateMachine {
     // LieEvent::HAL/HAT/HALSChanged to the LIE FSM when nessecary.
     fn get_lie_events(&self) -> Vec<LieEvent> {
         todo!()
+    }
+
+    // Attempt to expire an offer by the given system ID. Returns false if the ID is not there or if
+    // the offer is already expired, and true otherwise.
+    pub fn expire_offer_by_id(&mut self, system_id: SystemID) -> bool {
+        match self.offers.get_mut(&system_id.get()) {
+            Some(offer) => {
+                offer.0.expired = true;
+                true
+            }
+            None => false,
+        }
     }
 }
 
@@ -1326,6 +1356,7 @@ pub struct Offer {
     level: Level,
     system_id: SystemIDType,
     state: LieState,
+    expired: bool,
 }
 
 #[derive(Debug, Clone)]
