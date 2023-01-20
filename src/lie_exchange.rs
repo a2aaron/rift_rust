@@ -28,8 +28,8 @@ pub struct LieStateMachine {
     lie_state: LieState,
     external_event_queue: VecDeque<LieEvent>,
     chained_event_queue: VecDeque<LieEvent>,
-    /// This node's level, as computed by the ZTP/LIE FSMs.
-    derived_level: Level,
+    /// This node's level, which can be changed by the ZTP FSM or set to a configured value.
+    level: Level,
     /// from spec:  Set of nodes offering HAL VOLs
     highest_available_level_systems: HALS,
     // from spec: Highest defined level value seen from all VOLs received.
@@ -57,7 +57,7 @@ impl LieStateMachine {
             lie_state: LieState::OneWay,
             external_event_queue: VecDeque::new(),
             chained_event_queue: VecDeque::new(),
-            derived_level: configured_level,
+            level: configured_level,
             highest_available_level_systems: HALS,
             highest_available_level: Level::Undefined,
             highest_adjacency_threeway: Level::Undefined,
@@ -104,7 +104,7 @@ impl LieStateMachine {
             )
             .entered();
             let new_state = self.process_lie_event(event, socket, node_info, ztp_fsm)?;
-            self.transition_to(new_state, node_info);
+            self.transition_to(new_state);
         }
 
         // Drain the chained event queue, if an external event caused some events to be pushed.
@@ -118,14 +118,14 @@ impl LieStateMachine {
             )
             .entered();
             let new_state = self.process_lie_event(event, socket, node_info, ztp_fsm)?;
-            self.transition_to(new_state, node_info);
+            self.transition_to(new_state);
         }
         Ok(())
     }
 
     /// Set the current state to the new state. If this would cause the state to enter LieState::OneWay,
     /// then CLEANUP is also performed. If the current state is already equal to the new state, noop.
-    fn transition_to(&mut self, new_state: LieState, node_info: &NodeInfo) {
+    fn transition_to(&mut self, new_state: LieState) {
         if new_state != self.lie_state {
             tracing::trace!(from =? self.lie_state, to =? new_state, "state transition",);
             // on Entry into OneWay: CLEANUP
@@ -134,7 +134,6 @@ impl LieStateMachine {
             }
             if new_state == LieState::ThreeWay {
                 tracing::info!(
-                    this_node = node_info.node_name,
                     neighbor =? self.neighbor.as_ref().unwrap().name,
                     "gained neighbor"
                 );
@@ -342,7 +341,7 @@ impl LieStateMachine {
                     LieState::MultipleNeighborsWait
                 }
                 LieEvent::LevelChanged(new_level) => {
-                    self.derived_level = new_level; // update level with event value
+                    self.level = new_level; // update level with event value
                     LieState::OneWay
                 }
                 LieEvent::HALSChanged(new_hals) => {
@@ -544,7 +543,7 @@ impl LieStateMachine {
         //       this node is a leaf and remote level is lower than HAT OR
         //       (LIE's level is not leaf AND its difference is more than one from this node's level)
         //    then CLEANUP, PUSH UpdateZTPOffer, PUSH UnacceptableHeader
-        let unacceptable_header = match (self.derived_level, lie_level) {
+        let unacceptable_header = match (self.level, lie_level) {
             (_, Level::Undefined) => true,
             (Level::Undefined, _) => true,
             (Level::Value(derived_level), Level::Value(lie_level)) => {
@@ -565,7 +564,7 @@ impl LieStateMachine {
         if unacceptable_header {
             self.cleanup();
             tracing::debug!(
-                local_level =? self.derived_level,
+                local_level =? self.level,
                 remote_level =? lie_level,
                 "rejecting LIE packet (UnacceptableHeader)"
             );
@@ -695,7 +694,7 @@ impl LieStateMachine {
             major_version: PROTOCOL_MAJOR_VERSION,
             minor_version: PROTOCOL_MINOR_VERSION,
             sender: node_info.system_id.get(),
-            level: self.derived_level.into(),
+            level: self.level.into(),
         };
 
         // TODO: fill in these values with real data, instead of None
@@ -755,7 +754,7 @@ impl LieStateMachine {
 
     // implements "update level with event value" from spec
     fn update_level(&mut self, new_level: Level) {
-        self.derived_level = new_level;
+        self.level = new_level;
     }
 
     // implements "store new HAL" from spec
