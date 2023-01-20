@@ -5,6 +5,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+use serde::Serialize;
+
 use crate::{
     lie_exchange::{self, LeafFlags, LieEvent, LieStateMachine, ZtpStateMachine},
     models::{
@@ -16,8 +18,10 @@ use crate::{
 };
 
 /// Represents a network of nodes.
+#[derive(Serialize)]
 pub struct Network {
     nodes: Vec<Node>,
+    #[serde(skip)]
     keys: SecretKeyStore,
 }
 
@@ -55,6 +59,7 @@ impl Network {
 }
 
 /// A node. A node may contain one or more Links, which are the node's physical neighbors.
+#[derive(Serialize)]
 struct Node {
     links: Vec<Link>,
     ztp_fsm: ZtpStateMachine,
@@ -114,13 +119,17 @@ impl Node {
 /// A Link represents a physical connection between two nodes. Note that, even if two nodes are
 /// _physically_ connected, they might not be _logically_ connected (in fact, the entire point of
 /// RIFT is to determine which physical connections are logical).
+#[derive(Serialize)]
 struct Link {
     /// The socket managing the connection to the adjacent node.
+    #[serde(skip)]
     link_socket: LinkSocket,
     /// The state machine for LIE exchange.
     lie_fsm: LieStateMachine,
     /// Additional information about the link which doesn't really belong anywhere else.
+    #[serde(flatten)]
     node_info: NodeInfo,
+    #[serde(skip)]
     last_timer_tick: Option<Instant>,
 }
 
@@ -325,6 +334,7 @@ pub enum RecvPacketResult {
 }
 
 /// A convience struct for keep track of node specific information.
+#[derive(Serialize)]
 pub struct NodeInfo {
     /// The name of this node.
     pub node_name: Option<String>,

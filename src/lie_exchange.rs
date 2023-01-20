@@ -5,6 +5,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+use serde::Serialize;
+
 use crate::{
     models::{
         common::{
@@ -21,16 +23,25 @@ use crate::{
     topology::SystemID,
 };
 
-/// The state machien for LIE exchange.
+/// The state machine for LIE exchange. This struct accepts external events, and expects the consumer
+/// of this struct to provide those external events (this is to say, events such as TimerTick are not
+/// automatically handled and should be pushed manually.) This struct does store internal timers however.
+#[derive(Serialize)]
 pub struct LieStateMachine {
     /// Determines if a link is logically present in the topology. If the LIEState is ThreeWay, then
     /// the link is logically present. Otherwise, it is not.
     lie_state: LieState,
+    #[serde(skip)]
     external_event_queue: VecDeque<LieEvent>,
+    #[serde(skip)]
     chained_event_queue: VecDeque<LieEvent>,
     /// This node's level, which can be changed by the ZTP FSM or set to a configured value.
     level: Level,
     /// from spec:  Set of nodes offering HAL VOLs
+    /// This, along with `highest_available_level` and `highest_adjacency_threeway` are set by
+    /// LieEvent::HAL/HAT/HALSChanged and are sent by the ZTP FSM usually. For some reason, only the
+    /// HAT seems to be used in the LIE FSM, but it is included for completeness. Note that if ZTP
+    /// is not active, then the HAT and HAL will always be Level::Undefined (and hence have no effect).
     highest_available_level_systems: HALS,
     // from spec: Highest defined level value seen from all VOLs received.
     highest_available_level: Level,
@@ -46,12 +57,17 @@ pub struct LieStateMachine {
     /// is considered to be alive before it "expires", which in turn determines how long the LIE FSM
     /// will remaining in TwoWay or ThreeWay before automatically PUSHing HoldtimeExpired and reverting
     /// to OneWay..
+    #[serde(skip)]
     last_valid_lie: Option<(Instant, PacketHeader, LIEPacket)>,
     /// The time at which the multiple neighbors timer was started
+    #[serde(skip)]
     multiple_neighbors_start: Option<Instant>,
 }
 
 impl LieStateMachine {
+    /// Create a new LieStateMachine. The `configured_level` determines the level that the state machine
+    /// will start in. If ZTP is not used, then typically `configured_level` is not `Level::Undefined`.
+    /// Otherwise, if ZTP is used, then `configured_level` is typically `Level::Undefined`.
     pub fn new(configured_level: Level) -> LieStateMachine {
         LieStateMachine {
             lie_state: LieState::OneWay,
@@ -832,7 +848,7 @@ impl LieStateMachine {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 struct Neighbor {
     level: Level,
     address: IpAddr,
@@ -842,7 +858,7 @@ struct Neighbor {
     local_link_id: LinkIDType,
 }
 
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, Serialize)]
 pub enum LieState {
     OneWay,
     TwoWay,
@@ -928,7 +944,7 @@ impl LieEvent {
 /// A numerical level. A level of "Undefined" typically means that the level was either not specified
 /// (and hence will be inferred by ZTP) or it is not known yet. See also: [topology::Level]
 // TODO: are levels only in 0-24 range? if so, maybe enforce this?
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
 pub enum Level {
     Undefined,
     Value(u8),
@@ -953,16 +969,20 @@ impl From<Level> for Option<common::LevelType> {
 }
 
 // TODO: I have no idea what this will consist of.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize)]
 pub struct HALS;
 
+#[derive(Serialize)]
 pub struct ZtpStateMachine {
     state: ZtpState,
+    #[serde(skip)]
     external_event_queue: VecDeque<ZtpEvent>,
+    #[serde(skip)]
     chained_event_queue: VecDeque<ZtpEvent>,
     configured_level: Level,
     leaf_flags: LeafFlags,
     offers: HashMap<SystemIDType, Offer>,
+    #[serde(skip)]
     holddown_timer_start: Option<Instant>,
     highest_available_level: Level,
     highest_adjacency_threeway: Level,
@@ -1416,12 +1436,13 @@ impl ZtpStateMachine {
     }
 }
 
+#[derive(Serialize)]
 struct CompareOffersResults {
     hal: Option<Level>,
     hat: Option<Level>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 enum ZtpState {
     ComputeBestOffer,
     HoldingDown,
@@ -1470,7 +1491,7 @@ impl ZtpEvent {
     }
 }
 
-#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq, Serialize)]
 pub struct Offer {
     level: Level,
     system_id: SystemIDType,
@@ -1478,5 +1499,5 @@ pub struct Offer {
     expired: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct LeafFlags;
