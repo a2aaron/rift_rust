@@ -9,7 +9,7 @@ use crate::{
     models::{
         common::{
             self, LinkIDType, MTUSizeType, SystemIDType, UDPPortType, DEFAULT_BANDWIDTH,
-            DEFAULT_LIE_HOLDTIME, ILLEGAL_SYSTEM_I_D, LEAF_LEVEL,
+            DEFAULT_LIE_HOLDTIME, DEFAULT_ZTP_HOLDTIME, ILLEGAL_SYSTEM_I_D, LEAF_LEVEL,
             MULTIPLE_NEIGHBORS_LIE_HOLDTIME_MULTIPLER,
         },
         encoding::{
@@ -889,6 +889,7 @@ pub struct ZtpStateMachine {
     configured_level: Level,
     leaf_flags: LeafFlags,
     offers: HashMap<Offer, Instant>,
+    holddown_timer_start: Option<Instant>,
 }
 
 impl ZtpStateMachine {
@@ -900,6 +901,7 @@ impl ZtpStateMachine {
             configured_level,
             leaf_flags,
             offers: HashMap::new(),
+            holddown_timer_start: None,
         }
     }
 
@@ -1095,7 +1097,7 @@ impl ZtpStateMachine {
 
     // Implements the COMPARE_OFFERS procedure:
     // checks whether based on current offers and held last results the events
-    //BetterHAL/LostHAL/BetterHAT/LostHAT are necessary and returns them
+    // BetterHAL/LostHAL/BetterHAT/LostHAT are necessary and returns them
     fn compare_offers(&mut self) -> Vec<ZtpEvent> {
         todo!()
     }
@@ -1176,7 +1178,13 @@ impl ZtpStateMachine {
 
     // returns true if "holddown timer expired"
     fn holddown_timer_expired(&self) -> bool {
-        todo!()
+        match self.holddown_timer_start {
+            Some(timer) => {
+                let duration = Instant::now().duration_since(timer);
+                duration > Duration::from_secs(DEFAULT_ZTP_HOLDTIME as u64)
+            }
+            None => true,
+        }
     }
 
     // implements "if any southbound adjacencies present then update holddown timer
