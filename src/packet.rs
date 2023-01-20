@@ -420,6 +420,8 @@ impl From<u16> for Nonce {
     }
 }
 
+/// Stores all of the keys along with their secrets. This is used to verify the signatures of
+/// security envelopes.
 pub struct SecretKeyStore {
     secrets: HashMap<NonZeroU32, Key>,
 }

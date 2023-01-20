@@ -34,6 +34,8 @@ pub struct TopologyDescription {
 }
 
 impl TopologyDescription {
+    /// Finalize the topology description. Specifically: this will set it up so that each Link knows
+    /// the send and recv addresses for itself.
     pub fn finalize(&mut self) {
         let mut map = HashMap::new();
         for node in &self.get_nodes() {
@@ -74,10 +76,12 @@ impl TopologyDescription {
         }
     }
 
+    /// Get all the nodes as one big vector instead of across shards.
     pub fn get_nodes(&self) -> Vec<&NodeDescription> {
         self.shards.iter().flat_map(|shard| &shard.nodes).collect()
     }
 
+    /// Get all the keys.
     pub fn get_keys(&self) -> SecretKeyStore {
         let keys: HashMap<NonZeroU32, Key> = self
             .authentication_keys
@@ -271,6 +275,11 @@ impl Interface {
     }
 }
 
+/// The level a node has if it is configured to have one. This can be a number or a named level,
+/// of which there are four special names: `undefined`, `leaf`, `leaf-to-leaf`, and `top-of-fabric`
+/// Note that numerically, a level of `leaf` or `leaf-to-leaf` is equal to [common::LEAF_LEVEL] and
+/// a level of `top-of-fabric` is equal to [common::TOP_OF_FABRIC_LEVEL]. If not provided in the
+/// topology description, then the level for a node defaults to undefined.
 // TODO: I don't like `NamedLevel` being distinct, but I can't figure out how to do this otherwise
 // Maybe I should implement Serialize/Deserialize manually?
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
@@ -340,6 +349,9 @@ pub struct V6Prefix {
     pub mask: usize,
     pub metric: NonZeroUsize,
 }
+
+// Serde calls a function when passing a default. These functions are just for convience since some
+// of the fields need to default to true.
 
 const fn default_false() -> bool {
     false

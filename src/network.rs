@@ -14,13 +14,16 @@ use crate::{
     topology::{NodeDescription, SystemID, TopologyDescription},
 };
 
-/// Represents a network of nodes
+/// Represents a network of nodes.
 pub struct Network {
     nodes: Vec<Node>,
     keys: SecretKeyStore,
 }
 
 impl Network {
+    /// Create a network from a topology description file. The passivity determines which type of
+    /// nodes are actually created. The passivity determines which types of nodes are made. Typically,
+    /// passivity is used for debugging purposes.
     pub fn from_desc(desc: &TopologyDescription, passivity: Passivity) -> io::Result<Network> {
         let nodes = desc
             .get_nodes()
@@ -39,6 +42,8 @@ impl Network {
         })
     }
 
+    /// Run the network, sending and receving packets to and from the nodes. Note that this function
+    /// does not return unless an error occurs.
     pub fn run(&mut self) -> io::Result<()> {
         loop {
             for node in &mut self.nodes {
@@ -48,20 +53,22 @@ impl Network {
     }
 }
 
-/// A node
-pub struct Node {
+/// A node. A node may contain one or more Links, which are the node's physical neighbors.
+struct Node {
     links: Vec<Link>,
 }
 
 impl Node {
-    pub fn from_desc(node_desc: &NodeDescription) -> io::Result<Node> {
+    /// Create a node from a NodeDescription. This method will fail if the addresses specified in the
+    /// NodeDescription cannot be bound to.
+    fn from_desc(node_desc: &NodeDescription) -> io::Result<Node> {
         let links = node_desc
             .interfaces
             .iter()
             .enumerate()
             .map(|(local_link_id, link_desc)| {
                 let node_info = NodeInfo {
-                    name: Some(node_desc.name.clone()),
+                    node_name: Some(node_desc.name.clone()),
                     configured_level: node_desc.level.into(),
                     system_id: node_desc.system_id,
                 };
@@ -78,7 +85,8 @@ impl Node {
         Ok(Node { links })
     }
 
-    pub fn step(&mut self, key: &SecretKeyStore) -> io::Result<()> {
+    /// Run the node for one step.
+    fn step(&mut self, key: &SecretKeyStore) -> io::Result<()> {
         for link in &mut self.links {
             link.step(key)?;
         }
@@ -86,14 +94,22 @@ impl Node {
     }
 }
 
-pub struct Link {
+/// A Link represents a physical connection between two nodes. Note that, even if two nodes are
+/// _physically_ connected, they might not be _logically_ connected (in fact, the entire point of
+/// RIFT is to determine which physical connections are logical).
+struct Link {
+    /// The socket managing the connection to the adjacent node.
     link_socket: LinkSocket,
+    /// The state machine for LIE exchange.
     lie_fsm: LieStateMachine,
+    /// Additional information about the link which doesn't really belong anywhere else.
     node_info: NodeInfo,
 }
 
 impl Link {
-    pub fn from_desc(
+    /// Create a node from a NodeDescription. This method will fail if `lie_rx_addr` or `lie_tx_addr`
+    /// cannot be bound to.
+    fn from_desc(
         local_link_id: LinkIDType,
         node_info: NodeInfo,
         link_name: String,
@@ -129,34 +145,60 @@ impl Link {
     }
 }
 
-// Wrapper struct for a UdpSocket
+/// A wrapper struct for the LIE send and recv sockets. This struct also contains the state required
+/// for maintaining a connection, but not any of the LIE exchange stat emachine information. This
+/// seperation is done so that LieStateMachine doesn't have to contain self-referential structs.
 pub struct LinkSocket {
+    /// The socket that this link will receive LIE packets from.
     lie_rx_socket: UdpSocket,
+    /// The socket that this link will send LIE packets to.
     lie_tx_socket: UdpSocket,
+    /// The name of this link, typically specified by the topology description file
     pub name: String,
+    /// The local link ID. This value must be unique across all the links on a particular node, but
+    /// does not need to be unique across nodes.
     pub local_link_id: LinkIDType,
-    pub lie_rx_addr: SocketAddr,
-    pub lie_tx_addr: SocketAddr,
+    /// The packet number used when sending out a LIE. This is incremented each time a packet is sent.
     // TODO: the packet numbers are "per adjacency, per packet", so there should probably be 4 of these
     // however it also says the packet numbers are optional, so w/e
     packet_number: PacketNumber,
+    /// The weak local nonce value used when sending out a LIE. This is used for comptuation of the
+    /// security envelope. This value is local to this particular node, and is incremented according
+    /// to the rules as defined in the spec:
+    /// An implementation SHOULD increment a chosen nonce on every LIE FSM transition that ends up
+    /// in a different state from the previous one and MUST increment its nonce at least every
+    /// `nonce_regeneration_interval` (such considerations allow for efficient implementations
+    /// without opening a significant security risk).
+    /// TODO: Currently, the weak_nonce_local simply increments every packet. This is probably the
+    /// wrong thing to do.
     weak_nonce_local: Nonce,
+    /// The weak remote nonce value when sending out a LIE. This is used for computation of the
+    /// security envelope. This value is set whenever a packet is received on this LinkSocket.
+    /// TODO: Set the weak nonce remote value.
     weak_nonce_remote: Nonce,
 }
 
 impl LinkSocket {
-    pub fn new(
+    /// Create a new LinkSocket. This function will fail if `lie_rx_addr` cannot be bound to or if
+    /// `lie_tx_addr` cannot be connected to. Additionally, this function fails if `lie_rx_addr` is
+    /// a multicast address and cannot be joined.
+    fn new(
         name: String,
         local_link_id: LinkIDType,
         lie_rx_addr: SocketAddr,
         lie_tx_addr: SocketAddr,
     ) -> io::Result<LinkSocket> {
+        // For the receive socket, we bind to the receive address since we are only listening on
+        // this socket.
         let lie_rx_socket = UdpSocket::bind(lie_rx_addr)?;
         println!(
             "Interface {}: recving on {}, sending on {}",
             name, lie_rx_addr, lie_tx_addr
         );
 
+        // If the receive address is multicast, then we need to join the mutlicast group. We leave
+        // the interface unspecified here, since we don't care about which particular interface we
+        // receive messages on (we want all of them).
         if lie_rx_addr.ip().is_multicast() {
             match &lie_rx_addr.ip() {
                 IpAddr::V4(multiaddr) => {
@@ -170,8 +212,12 @@ impl LinkSocket {
             );
         }
 
+        // For the send socket, we bind to an unspecified address, since we don't care about the
+        // particular address we send from (we will let the OS pick for us).
         let unspecified = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0);
         let lie_tx_socket = UdpSocket::bind(unspecified)?;
+        // UDP is connectionless, however, Rust provides a connection abstraction,. This technically
+        // doesn't do anything other than default where `lie_tx_socket.send()` sends to by default.
         lie_tx_socket.connect(lie_tx_addr)?;
 
         Ok(LinkSocket {
@@ -179,8 +225,6 @@ impl LinkSocket {
             local_link_id,
             lie_rx_socket,
             lie_tx_socket,
-            lie_rx_addr,
-            lie_tx_addr,
             packet_number: PacketNumber::from(1),
             weak_nonce_local: Nonce::from(1),
             weak_nonce_remote: Nonce::Invalid,
@@ -217,17 +261,29 @@ impl LinkSocket {
 
         result
     }
+
+    pub fn flood_port(&self) -> u16 {
+        // TODO
+        0
+    }
 }
 
+/// A convience struct for keep track of node specific information.
 pub struct NodeInfo {
-    /// Node or adjacency name.
-    pub name: Option<String>,
+    /// The name of this node.
+    pub node_name: Option<String>,
+    /// The configured level. See [topology::Level] for the specific configuration options.
     pub configured_level: lie_exchange::Level,
+    /// The system ID of this node. Note that this is unique across all of the nodes.
     pub system_id: SystemID,
 }
 
+/// Which nodes to create from topology description files.
 pub enum Passivity {
+    /// Create only nodes marked passive.
     PassiveOnly,
+    /// Create only nodes marked non-passive.
     NonPassiveOnly,
+    /// Create both passive and non-passive nodes.
     Both,
 }

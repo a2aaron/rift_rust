@@ -491,9 +491,9 @@ impl LieStateMachine {
 
         // TODO: fill in these values with real data, instead of None
         let lie_packet = LIEPacket {
-            name: node_info.name.clone(),
+            name: node_info.node_name.clone(),
             local_id: socket.local_link_id as common::LinkIDType,
-            flood_port: socket.lie_rx_addr.port() as common::UDPPortType,
+            flood_port: socket.flood_port() as common::UDPPortType,
             link_mtu_size: Some(self.mtu),
             link_bandwidth: Some(DEFAULT_BANDWIDTH),
             neighbor,
@@ -634,27 +634,13 @@ impl LieEvent {
     }
 }
 
+/// A numerical level. A level of "Undefined" typically means that the level was either not specified
+/// (and hence will be inferred by ZTP) or it is not known yet. See also: [topology::Level]
 // TODO: are levels only in 0-24 range? if so, maybe enforce this?
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Level {
     Undefined,
     Value(u8),
-}
-
-impl Level {
-    fn is_leaf(&self) -> bool {
-        match self {
-            Level::Undefined => false,
-            Level::Value(value) => *value == LEAF_LEVEL as u8,
-        }
-    }
-
-    fn is_undefined(&self) -> bool {
-        match self {
-            Level::Undefined => true,
-            Level::Value(_) => false,
-        }
-    }
 }
 
 impl From<Option<common::LevelType>> for Level {
