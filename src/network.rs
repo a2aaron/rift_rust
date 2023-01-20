@@ -273,8 +273,6 @@ impl LinkSocket {
         }
     }
 
-    // TODO: THIS SUCKS (move tx_lie_port into this struct instead of passing it in. maybe also put LinkInfo into this struct)
-    // TODO: maybe definitely add the address here?
     pub fn send_packet(&mut self, packet: &ProtocolPacket) -> io::Result<usize> {
         let outer_header = OuterSecurityEnvelopeHeader::new(
             self.weak_nonce_local,
