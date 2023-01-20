@@ -40,8 +40,6 @@ pub struct LieStateMachine {
     /// Some, then a neighbor has been observed and will be sent out during SEND_LIE to reflect back
     /// to the node on the other end of the Link.
     neighbor: Option<Neighbor>,
-    /// The ZTP state machine. Maybe this should go into the Link?
-    ztp_fsm: ZtpStateMachine,
     /// A tuple containing the time at which the most recent valid LIE was received along with the
     /// holdtime that LIE packet had. This value is updated each time a valid LIE is received on the
     /// link (see [LieStateMachine::process_lie] for more detail). This controls how long the LIE
@@ -64,7 +62,6 @@ impl LieStateMachine {
             highest_available_level: Level::Undefined,
             highest_adjacency_threeway: Level::Undefined,
             neighbor: None,
-            ztp_fsm: ZtpStateMachine::new(configured_level, LeafFlags),
             last_valid_lie: None,
             multiple_neighbors_start: None,
         }
@@ -77,10 +74,11 @@ impl LieStateMachine {
         &mut self,
         socket: &mut LinkSocket,
         node_info: &NodeInfo,
+        ztp_fsm: &mut ZtpStateMachine,
     ) -> io::Result<()> {
         assert!(self.chained_event_queue.is_empty());
         while !self.external_event_queue.is_empty() {
-            self.process_external_event(socket, node_info)?;
+            self.process_external_event(socket, node_info, ztp_fsm)?;
         }
         assert!(self.chained_event_queue.is_empty());
         Ok(())
@@ -93,6 +91,7 @@ impl LieStateMachine {
         &mut self,
         socket: &mut LinkSocket,
         node_info: &NodeInfo,
+        ztp_fsm: &mut ZtpStateMachine,
     ) -> io::Result<()> {
         assert!(self.chained_event_queue.is_empty());
         if let Some(event) = self.external_event_queue.pop_front() {
@@ -101,7 +100,7 @@ impl LieStateMachine {
                 event.name(),
                 self.lie_state
             );
-            let new_state = self.process_lie_event(event, socket, node_info)?;
+            let new_state = self.process_lie_event(event, socket, node_info, ztp_fsm)?;
             self.transition_to(new_state);
         }
 
@@ -112,7 +111,7 @@ impl LieStateMachine {
                 event.name(),
                 self.lie_state
             );
-            let new_state = self.process_lie_event(event, socket, node_info)?;
+            let new_state = self.process_lie_event(event, socket, node_info, ztp_fsm)?;
             self.transition_to(new_state);
         }
         Ok(())
@@ -143,6 +142,7 @@ impl LieStateMachine {
         event: LieEvent,
         socket: &mut LinkSocket,
         node_info: &NodeInfo,
+        ztp_fsm: &mut ZtpStateMachine,
     ) -> io::Result<LieState> {
         let new_state = match self.lie_state {
             LieState::OneWay => match event {
@@ -187,7 +187,7 @@ impl LieStateMachine {
                     LieState::OneWay
                 }
                 LieEvent::UpdateZTPOffer => {
-                    self.ztp_fsm.send_ztp_offer();
+                    self.send_offer(ztp_fsm);
                     LieState::OneWay
                 }
                 LieEvent::HATChanged(new_hat) => {
@@ -232,7 +232,7 @@ impl LieStateMachine {
                     LieState::TwoWay
                 }
                 LieEvent::UpdateZTPOffer => {
-                    self.ztp_fsm.send_ztp_offer(); // send offer to ZTP FSM
+                    self.send_offer(ztp_fsm); // send offer to ZTP FSM
                     LieState::TwoWay
                 }
                 LieEvent::HoldtimeExpired => LieState::OneWay,
@@ -339,7 +339,7 @@ impl LieStateMachine {
                     LieState::ThreeWay
                 }
                 LieEvent::UpdateZTPOffer => {
-                    self.ztp_fsm.send_ztp_offer(); // send offer to ZTP FSM
+                    self.send_offer(ztp_fsm); // send offer to ZTP FSM
                     LieState::ThreeWay
                 }
                 LieEvent::LieRcvd(address, lie_header, lie_packet) => {
@@ -395,7 +395,7 @@ impl LieStateMachine {
                 }
                 LieEvent::SendLie => LieState::MultipleNeighborsWait,
                 LieEvent::UpdateZTPOffer => {
-                    self.ztp_fsm.send_ztp_offer(); // send offer to ZTP FSM
+                    self.send_offer(ztp_fsm); // send offer to ZTP FSM
                     LieState::MultipleNeighborsWait
                 }
                 LieEvent::MultipleNeighborsDone => LieState::OneWay,
@@ -763,6 +763,21 @@ impl LieStateMachine {
             None => true, // No prior valid LIE to compare against, so always considere expired
         }
     }
+
+    fn send_offer(&self, ztp_fsm: &mut ZtpStateMachine) {
+        let level = if let Some((_, header, _)) = &self.last_valid_lie {
+            if let Some(level) = header.level {
+                Level::Value(level as u8)
+            } else {
+                Level::Undefined
+            }
+        } else {
+            Level::Undefined
+        };
+
+        let offer = Offer { level };
+        ztp_fsm.push_external_event(ZtpEvent::NeighborOffer(offer))
+    }
 }
 
 struct Neighbor {
@@ -969,10 +984,6 @@ impl ZtpStateMachine {
     pub fn push_external_event(&mut self, event: ZtpEvent) {
         println!("[ZTP] Pushing external event {}", event.name());
         self.external_event_queue.push_back(event);
-    }
-
-    fn send_ztp_offer(&self) {
-        println!("TODO: send_ztp_offer");
     }
 
     fn process_ztp_event(&mut self, event: ZtpEvent) -> ZtpState {

@@ -6,7 +6,7 @@ use std::{
 };
 
 use crate::{
-    lie_exchange::{self, LieEvent, LieStateMachine},
+    lie_exchange::{self, LeafFlags, LieEvent, LieStateMachine, ZtpStateMachine},
     models::{
         common::{self, LinkIDType},
         encoding::{PacketContent, ProtocolPacket},
@@ -57,12 +57,14 @@ impl Network {
 /// A node. A node may contain one or more Links, which are the node's physical neighbors.
 struct Node {
     links: Vec<Link>,
+    ztp_fsm: ZtpStateMachine,
 }
 
 impl Node {
     /// Create a node from a NodeDescription. This method will fail if the addresses specified in the
     /// NodeDescription cannot be bound to.
     fn from_desc(node_desc: &NodeDescription) -> io::Result<Node> {
+        let configured_level = node_desc.level.into();
         let links = node_desc
             .interfaces
             .iter()
@@ -70,7 +72,7 @@ impl Node {
             .map(|(local_link_id, link_desc)| {
                 let node_info = NodeInfo {
                     node_name: Some(node_desc.name.clone()),
-                    configured_level: node_desc.level.into(),
+                    configured_level,
                     system_id: node_desc.system_id,
                 };
                 Link::from_desc(
@@ -83,13 +85,16 @@ impl Node {
             })
             .collect::<io::Result<_>>()?;
 
-        Ok(Node { links })
+        Ok(Node {
+            links,
+            ztp_fsm: ZtpStateMachine::new(configured_level, LeafFlags),
+        })
     }
 
     /// Run the node for one step.
     fn step(&mut self, key: &SecretKeyStore) -> io::Result<()> {
         for link in &mut self.links {
-            link.step(key)?;
+            link.step(key, &mut self.ztp_fsm)?;
         }
         Ok(())
     }
@@ -126,7 +131,7 @@ impl Link {
         })
     }
 
-    pub fn step(&mut self, keys: &SecretKeyStore) -> io::Result<()> {
+    pub fn step(&mut self, keys: &SecretKeyStore, ztp_fsm: &mut ZtpStateMachine) -> io::Result<()> {
         match self.link_socket.recv_packet(keys) {
             RecvPacketResult::NoPacket => (),
             RecvPacketResult::Packet { packet, address } => {
@@ -153,7 +158,7 @@ impl Link {
         }
 
         self.lie_fsm
-            .process_external_events(&mut self.link_socket, &self.node_info)?;
+            .process_external_events(&mut self.link_socket, &self.node_info, ztp_fsm)?;
         Ok(())
     }
 }
