@@ -4,6 +4,7 @@ use std::num::{NonZeroU32, NonZeroUsize};
 
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
+use tracing::warn;
 
 use crate::lie_exchange;
 use crate::models::common::{
@@ -71,6 +72,23 @@ impl TopologyDescription {
                     interface.lie_tx_addr = map.get(&lie_tx_port).copied();
                     interface.tie_rx_addr = map.get(&tie_rx_port).copied();
                     interface.tie_tx_addr = map.get(&tie_tx_port).copied();
+
+                    if interface.lie_rx_addr.is_none() {
+                        tracing::error!(
+                            node = node.name,
+                            interface = interface.name,
+                            port = lie_rx_port,
+                            "missing address for lie_rx_addr (no corresponding IP address exists for port)"
+                        )
+                    }
+                    if interface.lie_tx_addr.is_none() {
+                        tracing::error!(
+                            node = node.name,
+                            interface = interface.name,
+                            port = lie_tx_port,
+                            "missing address for lie_tx_addr (no corresponding IP address exists for port)"
+                        )
+                    }
                 }
             }
         }
