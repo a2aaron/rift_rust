@@ -649,8 +649,8 @@ impl LieStateMachine {
     fn send_lie_procedure(&self, socket: &mut LinkSocket, node_info: &NodeInfo) -> io::Result<()> {
         let neighbor = match &self.neighbor {
             Some(neighbor) => Some(encoding::Neighbor {
-                originator: node_info.system_id.get(),
-                remote_id: neighbor.local_link_id, // TODO: should this be the system id?
+                originator: neighbor.system_id,
+                remote_id: neighbor.local_link_id,
             }),
             None => None,
         };
