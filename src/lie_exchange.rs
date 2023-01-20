@@ -93,14 +93,20 @@ impl LieStateMachine {
         node_info: &NodeInfo,
         ztp_fsm: &mut ZtpStateMachine,
     ) -> io::Result<()> {
+        let _span = tracing::info_span!(
+            target: "LIE_FSM",
+            "process_external_event",
+            state =? self.lie_state,
+            level =? self.level,
+        )
+        .entered();
+
         assert!(self.chained_event_queue.is_empty());
         if let Some(event) = self.external_event_queue.pop_front() {
             let _span = tracing::trace_span!(
-                target: "LIE_FSM",
-                "process_external_event",
-                queue_type = "external",
+                "external_event_queue",
                 event = event.name(),
-                state =? self.lie_state
+                state =? self.lie_state,
             )
             .entered();
             let new_state = self.process_lie_event(event, socket, node_info, ztp_fsm)?;
@@ -110,11 +116,9 @@ impl LieStateMachine {
         // Drain the chained event queue, if an external event caused some events to be pushed.
         while let Some(event) = self.chained_event_queue.pop_front() {
             let _span = tracing::trace_span!(
-                target: "LIE_FSM",
-                "process_external_event",
-                queue_type = "external",
+                "chained_event_queue",
                 event = event.name(),
-                state =? self.lie_state
+                state =? self.lie_state,
             )
             .entered();
             let new_state = self.process_lie_event(event, socket, node_info, ztp_fsm)?;
@@ -134,7 +138,7 @@ impl LieStateMachine {
             }
             if new_state == LieState::ThreeWay {
                 tracing::info!(
-                    neighbor =? self.neighbor.as_ref().unwrap().name,
+                    neighbor =? self.neighbor.as_ref().unwrap(),
                     "gained neighbor"
                 );
             }
@@ -748,7 +752,12 @@ impl LieStateMachine {
     // any chained events will also be processed before the next external event. This is to prevent
     // weird edge cases where an external event may be added between a set of chained events.
     fn push(&mut self, event: LieEvent) {
-        tracing::trace!(event = event.name(), "PUSH procedure");
+        tracing::trace!(
+            event = event.name(),
+            external_queue =? self.external_event_queue,
+            chained_queue =? self.chained_event_queue,
+            "PUSH procedure"
+        );
         self.chained_event_queue.push_back(event)
     }
 
@@ -810,7 +819,11 @@ impl LieStateMachine {
                 state: self.lie_state,
                 expired: false,
             };
+
+            tracing::trace!(offer =? offer, "Sending offer to ZTP FSM");
             ztp_fsm.push_external_event(ZtpEvent::NeighborOffer(offer))
+        } else {
+            tracing::trace!("Ignoring send_offer call (last_valid_lie is None)");
         }
     }
 
@@ -820,6 +833,7 @@ impl LieStateMachine {
     }
 }
 
+#[derive(Debug)]
 struct Neighbor {
     level: Level,
     address: IpAddr,
@@ -1255,6 +1269,7 @@ impl ZtpStateMachine {
     // then PUSH according events
     // TODO: what does "adjacency holdtime" mean?
     fn update_offer(&mut self, offer: Offer) {
+        tracing::trace!(offer =? offer, "UPDATE_OFFER procedure");
         self.offers.insert(offer.system_id, offer);
 
         for event in self.compare_offers() {
@@ -1317,6 +1332,7 @@ impl ZtpStateMachine {
     //    1. if offered level > leaf then UPDATE_OFFER
     //    2. else REMOVE_OFFER
     fn process_offer(&mut self, offer: Offer) {
+        let _span = tracing::trace_span!("PROCESS_OFFER procedure", offer =? offer).entered();
         match offer.level {
             Level::Undefined => self.remove_offer(&offer),
             Level::Value(level) => {
