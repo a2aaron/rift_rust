@@ -48,24 +48,12 @@ impl Network {
         })
     }
 
-    /// Run the network, sending and receving packets to and from the nodes. Note that this function
-    /// does not return unless an error occurs.
-    pub fn run(&mut self) -> io::Result<()> {
-        let mut timer = Timer::new(Duration::from_secs(1));
-        let mut i = 0;
-        loop {
-            for node in &mut self.nodes {
-                node.step(&self.keys)?;
-            }
-            if timer.is_expired() {
-                let json = serde_json::to_string_pretty(&self)?;
-                let path = format!("{}_out.json", i);
-                std::fs::write(&path, json)?;
-                info!(path = path, "wrote debug serialization");
-                timer.start();
-                i += 1;
-            }
+    /// Run the network, sending and receving packets to and from the nodes.
+    pub fn step(&mut self) -> io::Result<()> {
+        for node in &mut self.nodes {
+            node.step(&self.keys)?;
         }
+        Ok(())
     }
 }
 
