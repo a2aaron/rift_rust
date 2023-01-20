@@ -102,6 +102,10 @@ impl LieStateMachine {
             let new_state = self.process_lie_event(event, socket, node_info)?;
             if new_state != self.lie_state {
                 println!("transitioning: {:?} -> {:?}", self.lie_state, new_state);
+                // on Entry into OneWay: CLEANUP
+                if new_state == LieState::OneWay {
+                    self.cleanup();
+                }
                 self.lie_state = new_state;
             }
         }
