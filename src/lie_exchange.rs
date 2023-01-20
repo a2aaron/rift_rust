@@ -931,7 +931,7 @@ pub struct ZtpStateMachine {
     chained_event_queue: VecDeque<ZtpEvent>,
     configured_level: Level,
     leaf_flags: LeafFlags,
-    offers: HashMap<SystemIDType, (Offer, Instant)>,
+    offers: HashMap<SystemIDType, Offer>,
     holddown_timer_start: Option<Instant>,
     highest_available_level: Level,
     highest_adjacency_threeway: Level,
@@ -1159,13 +1159,13 @@ impl ZtpStateMachine {
     fn compare_offers(&mut self) -> Vec<ZtpEvent> {
         let mut events = vec![];
 
-        let best_offer = self.offers.values().map(|x| x.0.level).max();
+        let best_offer = self.offers.values().map(|x| x.level).max();
         let best_offer_hat = self
             .offers
             .values()
             .filter_map(|x| {
-                if x.0.state == LieState::ThreeWay {
-                    Some(x.0.level)
+                if x.state == LieState::ThreeWay {
+                    Some(x.level)
                 } else {
                     None
                 }
@@ -1198,7 +1198,7 @@ impl ZtpStateMachine {
     // then PUSH according events
     // TODO: what does "adjacency holdtime" mean?
     fn update_offer(&mut self, offer: Offer) {
-        self.offers.insert(offer.system_id, (offer, Instant::now()));
+        self.offers.insert(offer.system_id, offer);
 
         for event in self.compare_offers() {
             self.push(event);
@@ -1263,7 +1263,7 @@ impl ZtpStateMachine {
 
     // implements "remove expired offers"
     fn remove_expired_offers(&mut self) {
-        self.offers.retain(|_, (offer, _)| !offer.expired);
+        self.offers.retain(|_, offer| !offer.expired);
     }
 
     // returns true if "holddown timer expired"
@@ -1294,7 +1294,7 @@ impl ZtpStateMachine {
     pub fn expire_offer_by_id(&mut self, system_id: SystemID) -> bool {
         match self.offers.get_mut(&system_id.get()) {
             Some(offer) => {
-                offer.0.expired = true;
+                offer.expired = true;
                 true
             }
             None => false,
