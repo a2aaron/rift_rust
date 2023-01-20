@@ -2,10 +2,11 @@ use std::{
     error::Error,
     io,
     net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use serde::Serialize;
+use tracing::info;
 
 use crate::{
     lie_exchange::{self, LeafFlags, LieEvent, LieStateMachine, Timer, ZtpStateMachine},
@@ -50,9 +51,19 @@ impl Network {
     /// Run the network, sending and receving packets to and from the nodes. Note that this function
     /// does not return unless an error occurs.
     pub fn run(&mut self) -> io::Result<()> {
+        let mut timer = Timer::new(Duration::from_secs(1));
+        let mut i = 0;
         loop {
             for node in &mut self.nodes {
                 node.step(&self.keys)?;
+            }
+            if timer.is_expired() {
+                let json = serde_json::to_string_pretty(&self)?;
+                let path = format!("{}_out.json", i);
+                std::fs::write(&path, json)?;
+                info!(path = path, "wrote debug serialization");
+                timer.start();
+                i += 1;
             }
         }
     }
@@ -63,6 +74,8 @@ impl Network {
 struct Node {
     links: Vec<Link>,
     ztp_fsm: ZtpStateMachine,
+    #[serde(flatten)]
+    node_info: NodeInfo,
 }
 
 impl Node {
@@ -70,19 +83,19 @@ impl Node {
     /// NodeDescription cannot be bound to.
     fn from_desc(node_desc: &NodeDescription) -> io::Result<Node> {
         let configured_level = node_desc.level.into();
+        let node_info = NodeInfo {
+            node_name: Some(node_desc.name.clone()),
+            configured_level,
+            system_id: node_desc.system_id,
+        };
         let links = node_desc
             .interfaces
             .iter()
             .enumerate()
             .map(|(local_link_id, link_desc)| {
-                let node_info = NodeInfo {
-                    node_name: Some(node_desc.name.clone()),
-                    configured_level,
-                    system_id: node_desc.system_id,
-                };
                 Link::from_desc(
                     local_link_id as LinkIDType,
-                    node_info,
+                    node_info.clone(),
                     link_desc.name.clone(),
                     link_desc.lie_rx_addr(),
                     link_desc.lie_tx_addr(),
@@ -93,6 +106,7 @@ impl Node {
         Ok(Node {
             links,
             ztp_fsm: ZtpStateMachine::new(configured_level, LeafFlags),
+            node_info,
         })
     }
 
@@ -327,7 +341,7 @@ pub enum RecvPacketResult {
 }
 
 /// A convience struct for keep track of node specific information.
-#[derive(Serialize)]
+#[derive(Serialize, Clone)]
 pub struct NodeInfo {
     /// The name of this node.
     pub node_name: Option<String>,

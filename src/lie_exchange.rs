@@ -941,6 +941,7 @@ impl LieEvent {
 /// (and hence will be inferred by ZTP) or it is not known yet. See also: [topology::Level]
 // TODO: are levels only in 0-24 range? if so, maybe enforce this?
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
+#[serde(untagged)]
 pub enum Level {
     Undefined,
     Value(u8),
