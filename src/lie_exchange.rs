@@ -100,14 +100,7 @@ impl LieStateMachine {
                 self.lie_state
             );
             let new_state = self.process_lie_event(event, socket, node_info)?;
-            if new_state != self.lie_state {
-                println!("transitioning: {:?} -> {:?}", self.lie_state, new_state);
-                // on Entry into OneWay: CLEANUP
-                if new_state == LieState::OneWay {
-                    self.cleanup();
-                }
-                self.lie_state = new_state;
-            }
+            self.transition_to(new_state);
         }
 
         // Drain the chained event queue, if an external event caused some events to be pushed.
@@ -118,16 +111,22 @@ impl LieStateMachine {
                 self.lie_state
             );
             let new_state = self.process_lie_event(event, socket, node_info)?;
-            if new_state != self.lie_state {
-                println!("transitioning: {:?} -> {:?}", self.lie_state, new_state);
-                // on Entry into OneWay: CLEANUP
-                if new_state == LieState::OneWay {
-                    self.cleanup();
-                }
-                self.lie_state = new_state;
-            }
+            self.transition_to(new_state);
         }
         Ok(())
+    }
+
+    /// Set the current state to the new state. If this would cause the state to enter LieState::OneWay,
+    /// then CLEANUP is also performed. If the current state is already equal to the new state, noop.
+    fn transition_to(&mut self, new_state: LieState) {
+        if new_state != self.lie_state {
+            println!("transitioning: {:?} -> {:?}", self.lie_state, new_state);
+            // on Entry into OneWay: CLEANUP
+            if new_state == LieState::OneWay {
+                self.cleanup();
+            }
+            self.lie_state = new_state;
+        }
     }
 
     /// Push an external event onto the LIEEvent queue.
@@ -921,13 +920,7 @@ impl ZtpStateMachine {
                 self.state
             );
             let new_state = self.process_ztp_event(event);
-            // on Entry into ComputeBestOffer: LEVEL_COMPUTE
-            // on Entry into UpdatingClients: update all LIE FSMs with computation results
-            if new_state == ZtpState::ComputeBestOffer {
-                self.level_compute();
-            } else if new_state == ZtpState::UpdatingClients {
-                self.update_lie_fsm();
-            }
+            self.transition_to(new_state);
         }
 
         // Drain the chained event queue, if an external event caused some events to be pushed.
@@ -938,17 +931,23 @@ impl ZtpStateMachine {
                 self.state
             );
             let new_state = self.process_ztp_event(event);
-            if new_state != self.state {
-                println!("transitioning: {:?} -> {:?}", self.state, new_state);
-                // on Entry into ComputeBestOffer: LEVEL_COMPUTE
-                // on Entry into UpdatingClients: update all LIE FSMs with computation results
-                if new_state == ZtpState::ComputeBestOffer {
-                    self.level_compute();
-                } else if new_state == ZtpState::UpdatingClients {
-                    self.update_lie_fsm();
-                }
-                self.state = new_state;
+            self.transition_to(new_state);
+        }
+    }
+
+    /// Set the current state to the new state. If this would cause the state to enter LieState::OneWay,
+    /// then CLEANUP is also performed. If the current state is already equal to the new state, noop.
+    fn transition_to(&mut self, new_state: ZtpState) {
+        if new_state != self.state {
+            println!("transitioning: {:?} -> {:?}", self.state, new_state);
+            // on Entry into ComputeBestOffer: LEVEL_COMPUTE
+            // on Entry into UpdatingClients: update all LIE FSMs with computation results
+            if new_state == ZtpState::ComputeBestOffer {
+                self.level_compute();
+            } else if new_state == ZtpState::UpdatingClients {
+                self.update_lie_fsm();
             }
+            self.state = new_state;
         }
     }
 
