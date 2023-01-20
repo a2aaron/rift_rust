@@ -68,10 +68,26 @@ impl LieStateMachine {
         }
     }
 
-    /// Process a single external event, if there exists events in the event queue. Note that this
+    /// Process a external events, if there exist any events in the event queue. Note that this
     /// also processes any events pushed by the PUSH procedure, so the `chained_event_queue` will
     /// be empty both before and after this call.
-    pub fn process_external_event(
+    pub fn process_external_events(
+        &mut self,
+        socket: &mut LinkSocket,
+        node_info: &NodeInfo,
+    ) -> io::Result<()> {
+        assert!(self.chained_event_queue.is_empty());
+        while !self.external_event_queue.is_empty() {
+            self.process_external_event(socket, node_info)?;
+        }
+        assert!(self.chained_event_queue.is_empty());
+        Ok(())
+    }
+
+    /// Process a single external event, if there exists an event in the event queue. Note that this
+    /// also processes any events pushed by the PUSH procedure, so the `chained_event_queue` will
+    /// be empty both before and after this call.
+    fn process_external_event(
         &mut self,
         socket: &mut LinkSocket,
         node_info: &NodeInfo,

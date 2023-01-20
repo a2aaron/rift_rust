@@ -2,6 +2,7 @@ use std::{
     error::Error,
     io,
     net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket},
+    time::{Duration, Instant},
 };
 
 use crate::{
@@ -104,6 +105,7 @@ struct Link {
     lie_fsm: LieStateMachine,
     /// Additional information about the link which doesn't really belong anywhere else.
     node_info: NodeInfo,
+    last_timer_tick: Option<Instant>,
 }
 
 impl Link {
@@ -120,12 +122,11 @@ impl Link {
             link_socket: LinkSocket::new(link_name, local_link_id, lie_rx_addr, lie_tx_addr)?,
             lie_fsm: LieStateMachine::new(node_info.configured_level),
             node_info,
+            last_timer_tick: None,
         })
     }
 
     pub fn step(&mut self, keys: &SecretKeyStore) -> io::Result<()> {
-        self.lie_fsm
-            .process_external_event(&mut self.link_socket, &self.node_info)?;
         match self.link_socket.recv_packet(keys) {
             Ok((packet, address)) => {
                 match packet.content {
@@ -137,6 +138,21 @@ impl Link {
             }
             Err(err) => println!("Could not recv packet: {}", err),
         }
+
+        let do_timer_tick = if let Some(last_timer_tick) = self.last_timer_tick {
+            let duration = Instant::now().duration_since(last_timer_tick);
+            duration > Duration::from_secs(1)
+        } else {
+            true
+        };
+
+        if do_timer_tick {
+            self.lie_fsm.push_external_event(LieEvent::TimerTick);
+            self.last_timer_tick = Some(Instant::now());
+        }
+
+        self.lie_fsm
+            .process_external_events(&mut self.link_socket, &self.node_info)?;
         Ok(())
     }
 }
