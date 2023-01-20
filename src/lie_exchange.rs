@@ -5,8 +5,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use tracing::instrument;
-
 use crate::{
     models::{
         common::{
@@ -106,7 +104,7 @@ impl LieStateMachine {
             )
             .entered();
             let new_state = self.process_lie_event(event, socket, node_info, ztp_fsm)?;
-            self.transition_to(new_state);
+            self.transition_to(new_state, node_info);
         }
 
         // Drain the chained event queue, if an external event caused some events to be pushed.
@@ -120,20 +118,28 @@ impl LieStateMachine {
             )
             .entered();
             let new_state = self.process_lie_event(event, socket, node_info, ztp_fsm)?;
-            self.transition_to(new_state);
+            self.transition_to(new_state, node_info);
         }
         Ok(())
     }
 
     /// Set the current state to the new state. If this would cause the state to enter LieState::OneWay,
     /// then CLEANUP is also performed. If the current state is already equal to the new state, noop.
-    fn transition_to(&mut self, new_state: LieState) {
+    fn transition_to(&mut self, new_state: LieState, node_info: &NodeInfo) {
         if new_state != self.lie_state {
             tracing::trace!(from =? self.lie_state, to =? new_state, "state transition",);
             // on Entry into OneWay: CLEANUP
             if new_state == LieState::OneWay {
                 self.cleanup();
             }
+            if new_state == LieState::ThreeWay {
+                tracing::info!(
+                    this_node = node_info.node_name,
+                    neighbor =? self.neighbor.as_ref().unwrap().name,
+                    "gained neighbor"
+                );
+            }
+
             self.lie_state = new_state;
         }
     }
@@ -558,6 +564,11 @@ impl LieStateMachine {
         };
         if unacceptable_header {
             self.cleanup();
+            tracing::debug!(
+                local_level =? self.derived_level,
+                remote_level =? lie_level,
+                "rejecting LIE packet (UnacceptableHeader)"
+            );
             self.push(LieEvent::UpdateZTPOffer);
             self.push(LieEvent::UnacceptableHeader);
             return;

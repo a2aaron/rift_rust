@@ -17,24 +17,26 @@ struct Args {
     passive: bool,
     #[arg(long, conflicts_with("passive"))]
     non_passive: bool,
+    #[arg(long, default_value = "info")]
+    max_level: tracing::Level,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    std::env::set_var("RUST_BACKTRACE", "1");
-
+    let args = Args::parse();
     tracing_subscriber::fmt()
         .event_format(format::format().pretty())
-        .with_max_level(tracing::Level::TRACE)
+        .with_max_level(args.max_level)
         .without_time()
         .init(); // you are going to loose Subscriber
 
-    let args = Args::parse();
     let passivity = match (args.passive, args.non_passive) {
         (true, true) => unreachable!("--passive and --non-passive conflict with eachother"),
         (true, false) => Passivity::PassiveOnly,
         (false, true) => Passivity::NonPassiveOnly,
         (false, false) => Passivity::Both,
     };
+
+    std::env::set_var("RUST_BACKTRACE", "1");
 
     let topology = std::fs::read_to_string(args.topology)?;
     let topology = {

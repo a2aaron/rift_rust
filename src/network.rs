@@ -143,6 +143,12 @@ impl Link {
     }
 
     pub fn step(&mut self, keys: &SecretKeyStore, ztp_fsm: &mut ZtpStateMachine) -> io::Result<()> {
+        let _span = tracing::debug_span!(
+            "link_step",
+            node_name = self.node_info.node_name,
+            link_name = self.link_socket.name,
+        )
+        .entered();
         match self.link_socket.recv_packet(keys) {
             RecvPacketResult::NoPacket => (),
             RecvPacketResult::Packet { packet, address } => {
