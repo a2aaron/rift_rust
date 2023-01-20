@@ -1256,21 +1256,27 @@ impl ZtpStateMachine {
     // compute best offered or configured level and HAL/HAT, if anything changed PUSH ComputationDone
     fn level_compute(&mut self) {
         tracing::trace!("LEVEL_COMPUTE procedure");
+
+        let mut anything_changed = false;
         let new_hal = self.compare_offer_results.hal;
         let new_hat = self.compare_offer_results.hat;
 
         if let Some(new_hal) = new_hal && new_hal != self.highest_available_level {
             self.highest_available_level = new_hal;
             self.hal_needs_resend = true;
+            anything_changed = true;
         }
 
         if let Some(new_hat) = new_hat && new_hat != self.highest_adjacency_threeway {
             self.highest_adjacency_threeway = new_hat;
             self.hat_needs_resend = true;
+            anything_changed = true;
         }
 
         // rift-python appears to push this unconditionally?
-        self.push(ZtpEvent::ComputationDone);
+        if anything_changed {
+            self.push(ZtpEvent::ComputationDone);
+        }
     }
 
     // Implements the REMOVE_OFFER procedure:
