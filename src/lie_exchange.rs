@@ -566,17 +566,17 @@ impl LieStateMachine {
         let unacceptable_header = match (self.level, lie_level) {
             (_, Level::Undefined) => true,
             (Level::Undefined, _) => true,
-            (Level::Value(derived_level), Level::Value(lie_level)) => {
-                let this_node_is_leaf = derived_level == LEAF_LEVEL as u8;
+            (Level::Value(our_level), Level::Value(remote_level)) => {
+                let this_node_is_leaf = our_level == LEAF_LEVEL as u8;
                 let remote_lower_than_hat = match self.highest_adjacency_threeway {
                     // TODO: if our HAT is undefined, do we treat that always "lower" than the remote's level? (aka: always true)
                     // or not (always false)?
                     Level::Undefined => true,
-                    Level::Value(hat) => lie_level < hat,
+                    Level::Value(hat) => remote_level < hat,
                 };
 
-                let lie_is_not_leaf = lie_level != LEAF_LEVEL as u8;
-                let lie_more_than_one_away = u8::abs_diff(lie_level, derived_level) > 1;
+                let lie_is_not_leaf = remote_level != LEAF_LEVEL as u8;
+                let lie_more_than_one_away = u8::abs_diff(remote_level, our_level) > 1;
                 (this_node_is_leaf && remote_lower_than_hat)
                     || (lie_is_not_leaf && lie_more_than_one_away)
             }
