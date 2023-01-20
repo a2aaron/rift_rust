@@ -125,7 +125,7 @@ impl LieStateMachine {
                 }
                 LieEvent::HoldtimeExpired => LieState::OneWay,
                 LieEvent::HALSChanged(new_hals) => {
-                    self.store_HALS(new_hals); // store HALS
+                    self.store_hals(new_hals); // store HALS
                     LieState::OneWay
                 }
                 LieEvent::NeighborChangedAddress => LieState::OneWay,
@@ -151,7 +151,7 @@ impl LieStateMachine {
                     LieState::OneWay
                 }
                 LieEvent::HATChanged(new_hat) => {
-                    self.store_HAT(new_hat); // store HAT
+                    self.store_hat(new_hat); // store HAT
                     LieState::OneWay
                 }
                 LieEvent::MultipleNeighbors => {
@@ -167,7 +167,7 @@ impl LieStateMachine {
                 }
                 LieEvent::NeighborDroppedReflection => LieState::OneWay,
                 LieEvent::HALChanged(new_hal) => {
-                    self.store_HAL(new_hal); // store new HAL
+                    self.store_hal(new_hal); // store new HAL
                     LieState::OneWay
                 }
                 // Illegal State Transitions
@@ -204,11 +204,11 @@ impl LieStateMachine {
                     LieState::TwoWay
                 }
                 LieEvent::HATChanged(new_hat) => {
-                    self.store_HAT(new_hat); // store HAT
+                    self.store_hat(new_hat); // store HAT
                     LieState::TwoWay
                 }
                 LieEvent::HALChanged(new_hal) => {
-                    self.store_HAL(new_hal); // store new HAL
+                    self.store_hal(new_hal); // store new HAL
                     LieState::TwoWay
                 }
                 LieEvent::LevelChanged(new_level) => {
@@ -239,7 +239,7 @@ impl LieStateMachine {
                     LieState::MultipleNeighborsWait
                 }
                 LieEvent::HALSChanged(new_hals) => {
-                    self.store_HALS(new_hals); // store HALS
+                    self.store_hals(new_hals); // store HALS
                     LieState::TwoWay
                 }
                 // Illegal State Transitions
@@ -289,7 +289,7 @@ impl LieStateMachine {
                     LieState::ThreeWay
                 }
                 LieEvent::HATChanged(new_hat) => {
-                    self.store_HAT(new_hat); // store HAT
+                    self.store_hat(new_hat); // store HAT
                     LieState::ThreeWay
                 }
                 LieEvent::UpdateZTPOffer => {
@@ -354,16 +354,16 @@ impl LieStateMachine {
                 }
                 LieEvent::MultipleNeighborsDone => LieState::OneWay,
                 LieEvent::HATChanged(new_hat) => {
-                    self.store_HAT(new_hat); // store HAT
+                    self.store_hat(new_hat); // store HAT
                     LieState::MultipleNeighborsWait
                 }
                 LieEvent::NeighborChangedAddress => LieState::MultipleNeighborsWait,
                 LieEvent::HALSChanged(new_hals) => {
-                    self.store_HALS(new_hals); // store HALS
+                    self.store_hals(new_hals); // store HALS
                     LieState::MultipleNeighborsWait
                 }
                 LieEvent::HALChanged(new_hal) => {
-                    self.store_HAL(new_hal); // store new HAL
+                    self.store_hal(new_hal); // store new HAL
                     LieState::MultipleNeighborsWait
                 }
                 LieEvent::MultipleNeighbors => {
@@ -652,17 +652,17 @@ impl LieStateMachine {
     }
 
     // implements "store new HAL" from spec
-    fn store_HAL(&mut self, new_hal: Level) {
+    fn store_hal(&mut self, new_hal: Level) {
         self.highest_available_level = new_hal;
     }
 
     // implements "store HAT" from spec
-    fn store_HAT(&mut self, new_hat: Level) {
+    fn store_hat(&mut self, new_hat: Level) {
         self.highest_adjacency_threeway = new_hat;
     }
 
     // implements "store HALS" from spec
-    fn store_HALS(&mut self, new_hals: HALS) {
+    fn store_hals(&mut self, new_hals: HALS) {
         self.highest_available_level_systems = new_hals;
     }
 
