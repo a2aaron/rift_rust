@@ -1030,11 +1030,11 @@ impl ZtpStateMachine {
                 // here we sent events, which will be returned and eventually added to all LIE FSMs.
                 if self.hal_needs_resend {
                     events.push(LieEvent::HALChanged(self.highest_available_level));
-                    if let Level::Value(hal) = self.highest_available_level {
+                    if let Level::Value(_) = self.highest_available_level {
                         // TODO: rift-python just directly sets self._derived_level, which means they
                         // don't issue LevelChanged (which also means that the LIE FSM does not
                         // reset to OneWay)
-                        events.push(LieEvent::LevelChanged(Level::Value(hal.saturating_sub(1))));
+                        events.push(LieEvent::LevelChanged(self.level()));
                     }
 
                     self.hal_needs_resend = false;
@@ -1326,7 +1326,14 @@ impl ZtpStateMachine {
     // implements "if any southbound adjacencies present then update holddown timer
     // to normal duration else fire holddown timer immediately"
     fn check_sounthbound_adjacencies(&mut self) {
-        todo!()
+        let any_southbound = self.offers.values().any(|offer| offer.level < self.level());
+        if any_southbound {
+            // Set holddown timer to normal duration.
+            self.holddown_timer_start = Some(Instant::now());
+        } else {
+            // Fire the holddown timmer immediate by setting it to None.
+            self.holddown_timer_start = None;
+        }
     }
 
     // Attempt to expire an offer by the given system ID. Returns false if the ID is not there or if
@@ -1338,6 +1345,21 @@ impl ZtpStateMachine {
                 true
             }
             None => false,
+        }
+    }
+
+    fn derived_level(&self) -> Level {
+        match self.highest_available_level {
+            Level::Undefined => Level::Undefined,
+            Level::Value(value) => Level::Value(value.saturating_sub(1)),
+        }
+    }
+
+    fn level(&self) -> Level {
+        if self.configured_level == Level::Undefined {
+            self.derived_level()
+        } else {
+            self.configured_level
         }
     }
 }
