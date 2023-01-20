@@ -1306,7 +1306,12 @@ impl ZtpStateMachine {
     // Implements the REMOVE_OFFER procedure:
     // remote the according offer and COMPARE_OFFERS, PUSH according events
     fn remove_offer(&mut self, offer: &Offer) {
-        self.offers.remove(&offer.system_id).unwrap();
+        let removed = self.offers.remove(&offer.system_id);
+        if removed.is_some() {
+            tracing::trace!(offer =? offer, remaining_offers =? self.offers, "REMOVE_OFFER procedure - removed offer");
+        } else {
+            tracing::trace!(offer =? offer, remaining_offers =? self.offers, "REMOVE_OFFER procedure - offer not found");
+        }
 
         for event in self.compare_offers() {
             self.push(event);
