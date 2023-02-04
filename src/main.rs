@@ -28,7 +28,8 @@ struct Args {
     /// Take a JSON snapshot every N seconds
     snapshot: Option<u64>,
     /// If provided, only run the network for N snapshots and then exit. Otherwise, run forever.
-    #[arg(long)]
+    /// Requires `snapshot` to be passed.
+    #[arg(long, requires = "snapshot")]
     max_snapshots: Option<usize>,
 }
 
