@@ -36,10 +36,11 @@ def process_link(link):
 
     return start, end, state, our_level, their_level
 
-FILENAME = sys.argv[1]
-print(f"opening {FILENAME}.json, writing to {FILENAME}.dot...")
+IN_FILENAME = sys.argv[1]
+OUT_FILENAME = sys.argv[2]
+print(f"opening {IN_FILENAME}, writing to {OUT_FILENAME}...")
 
-file = open(f"{FILENAME}.json")
+file = open(IN_FILENAME)
 network = json.load(file)
 
 graph = ["digraph {"]
@@ -102,5 +103,5 @@ for ((start, end), info) in all_edges.items():
 
 graph.append("}")
 graph = "\n".join(graph)
-outfile = open(f"{FILENAME}.dot", "w")
+outfile = open(OUT_FILENAME, "w")
 outfile.write(graph)

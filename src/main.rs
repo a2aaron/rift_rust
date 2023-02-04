@@ -27,6 +27,9 @@ struct Args {
     #[arg(long)]
     /// Take a JSON snapshot every N seconds
     snapshot: Option<u64>,
+    /// If provided, only run the network for N snapshots and then exit. Otherwise, run forever.
+    #[arg(long)]
+    max_snapshots: Option<usize>,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -66,12 +69,19 @@ fn main() -> Result<(), Box<dyn Error>> {
         if let Some(ref mut timer) = timer {
             if timer.is_expired() {
                 let json = serde_json::to_string_pretty(&network)?;
-                let path = format!("{}_out.json", i);
+                let path = format!("logs/out_{}.json", i);
                 std::fs::write(&path, json)?;
                 info!(path = path, "wrote debug serialization");
                 timer.start();
                 i += 1;
             }
         }
+
+        if let Some(max_snaps) = args.max_snapshots {
+            if i == max_snaps {
+                break;
+            }
+        }
     }
+    Ok(())
 }
