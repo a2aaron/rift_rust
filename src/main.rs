@@ -26,7 +26,7 @@ struct Args {
     max_level: tracing::Level,
     #[arg(long)]
     /// Take a JSON snapshot every N seconds
-    snapshot: Option<u64>,
+    snapshot: Option<f32>,
     /// If provided, only run the network for N snapshots and then exit. Otherwise, run forever.
     /// Requires `snapshot` to be passed.
     #[arg(long, requires = "snapshot")]
@@ -62,7 +62,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut timer = None;
     let mut i = 0;
     if let Some(snapshot_period) = args.snapshot {
-        timer = Some(Timer::new(Duration::from_secs(snapshot_period)));
+        timer = Some(Timer::new(Duration::from_secs_f32(snapshot_period)));
     }
     loop {
         network.step()?;
