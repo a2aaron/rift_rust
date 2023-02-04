@@ -8,6 +8,7 @@ default-run = "rift-rust"
 
 [dependencies]
 clap = { version = "4.0.32", features = ["derive"] }
+rand = "0.8.5"
 serde = { version = "1.0.152", features = ["derive"] }
 serde_json = "1.0.91"
 serde_yaml = "0.9.16"

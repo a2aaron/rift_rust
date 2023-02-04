@@ -1127,6 +1127,10 @@ impl ZtpStateMachine {
                         // TODO: rift-python just directly sets self._derived_level, which means they
                         // don't issue LevelChanged (which also means that the LIE FSM does not
                         // reset to OneWay)
+                        tracing::debug!(
+                            new_level =? self.level(),
+                            "Pushing LevelChanged from ZTP FSM"
+                        );
                         events.push(LieEvent::LevelChanged(self.level()));
                     }
 

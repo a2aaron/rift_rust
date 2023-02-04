@@ -5,9 +5,11 @@ use std::{
     time::Duration,
 };
 
+use rand::seq::{index, SliceRandom};
 use serde::Serialize;
 
 use crate::{
+    chaos::{ChaosSocket, RiftSocket},
     lie_exchange::{self, LeafFlags, LieEvent, LieStateMachine, Timer, ZtpStateMachine},
     models::{
         common::{self, LinkIDType},
@@ -49,9 +51,12 @@ impl Network {
 
     /// Run the network, sending and receving packets to and from the nodes.
     pub fn step(&mut self) -> io::Result<()> {
-        for node in &mut self.nodes {
+        for i in index::sample(&mut rand::thread_rng(), self.nodes.len(), self.nodes.len()) {
+            let node = &mut self.nodes[i];
             node.step(&self.keys)?;
         }
+
+        // self.nodes.shuffle(&mut rand::thread_rng());
         Ok(())
     }
 }
@@ -99,6 +104,9 @@ impl Node {
 
     /// Run the node for one step.
     fn step(&mut self, key: &SecretKeyStore) -> io::Result<()> {
+        let _span =
+            tracing::debug_span!("node_step", node_name = self.node_info.node_name,).entered();
+
         // Run the ZTP FSM
         let lie_events = self.ztp_fsm.process_external_events();
 
@@ -194,9 +202,9 @@ impl Link {
 /// seperation is done so that LieStateMachine doesn't have to contain self-referential structs.
 pub struct LinkSocket {
     /// The socket that this link will receive LIE packets from.
-    lie_rx_socket: UdpSocket,
+    lie_rx_socket: Box<dyn RiftSocket>,
     /// The socket that this link will send LIE packets to.
-    lie_tx_socket: UdpSocket,
+    lie_tx_socket: Box<dyn RiftSocket>,
     /// The name of this link, typically specified by the topology description file
     pub name: String,
     /// The maximum transmissible unit size.
@@ -270,8 +278,8 @@ impl LinkSocket {
         Ok(LinkSocket {
             name,
             local_link_id,
-            lie_rx_socket,
-            lie_tx_socket,
+            lie_rx_socket: Box::new(lie_rx_socket),
+            lie_tx_socket: Box::new(lie_tx_socket),
             mtu,
             packet_number: PacketNumber::from(1),
             weak_nonce_local: Nonce::from(1),
