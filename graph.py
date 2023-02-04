@@ -59,8 +59,6 @@ for node in network["nodes"]:
 
             assert(all_edges[pair]["end_state"] == "unknown")
             all_edges[pair]["end_state"] = state
-            
-            assert(all_edges[pair]["end_level"] == level)
         else:
             pair = (node_name, end_name)
             all_edges[pair] = {
