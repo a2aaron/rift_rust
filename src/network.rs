@@ -6,7 +6,6 @@ use std::{
 };
 
 use serde::Serialize;
-use tracing::info;
 
 use crate::{
     lie_exchange::{self, LeafFlags, LieEvent, LieStateMachine, Timer, ZtpStateMachine},
@@ -146,7 +145,13 @@ impl Link {
         lie_tx_addr: SocketAddr,
     ) -> io::Result<Link> {
         Ok(Link {
-            link_socket: LinkSocket::new(link_name, local_link_id, lie_rx_addr, lie_tx_addr)?,
+            link_socket: LinkSocket::new(
+                link_name,
+                local_link_id,
+                lie_rx_addr,
+                lie_tx_addr,
+                common::DEFAULT_MTU_SIZE as usize,
+            )?,
             lie_fsm: LieStateMachine::new(node_info.configured_level),
             node_info,
             last_timer_tick: Timer::new(Duration::from_secs(1)),
@@ -195,7 +200,7 @@ pub struct LinkSocket {
     /// The name of this link, typically specified by the topology description file
     pub name: String,
     /// The maximum transmissible unit size.
-    pub mtu: common::MTUSizeType,
+    pub mtu: usize,
     /// The local link ID. This value must be unique across all the links on a particular node, but
     /// does not need to be unique across nodes.
     pub local_link_id: LinkIDType,
@@ -227,6 +232,7 @@ impl LinkSocket {
         local_link_id: LinkIDType,
         lie_rx_addr: SocketAddr,
         lie_tx_addr: SocketAddr,
+        mtu: usize,
     ) -> io::Result<LinkSocket> {
         let _span = tracing::info_span!("LinkSocket::new", interface = name).entered();
         // For the receive socket, we bind to the receive address since we are only listening on
@@ -266,7 +272,7 @@ impl LinkSocket {
             local_link_id,
             lie_rx_socket,
             lie_tx_socket,
-            mtu: common::DEFAULT_MTU_SIZE,
+            mtu,
             packet_number: PacketNumber::from(1),
             weak_nonce_local: Nonce::from(1),
             weak_nonce_remote: Nonce::Invalid,
@@ -274,9 +280,17 @@ impl LinkSocket {
     }
 
     pub fn recv_packet(&mut self, keys: &SecretKeyStore) -> RecvPacketResult {
-        let mut bytes: Vec<u8> = vec![0; common::DEFAULT_MTU_SIZE as usize];
+        let mut bytes: Vec<u8> = vec![0; self.mtu];
         match self.lie_rx_socket.recv_from(&mut bytes) {
             Ok((length, address)) => {
+                // Check that the received number of bytes does fit within our MTU size (if it
+                // doesn't, then it's likely the packet is malformed and we shouldn't parse it.)
+                if length > self.mtu {
+                    return RecvPacketResult::Err(
+                        format!("Expected at most {} bytes, got {}", self.mtu, length).into(),
+                    );
+                }
+                // Remove excess zeros from bytes vector.
                 bytes.resize(length, 0u8);
                 match packet::parse_and_validate(&bytes, keys) {
                     Ok((outer_header, _tie_header, packet)) => {
@@ -288,6 +302,7 @@ impl LinkSocket {
                 }
             }
             Err(err) => {
+                // On WouldBlock, simply say there was no packet instead of erroring.
                 if err.kind() == io::ErrorKind::WouldBlock {
                     RecvPacketResult::NoPacket
                 } else {

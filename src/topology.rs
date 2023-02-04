@@ -4,7 +4,6 @@ use std::num::{NonZeroU32, NonZeroUsize};
 
 use serde::{Deserialize, Serialize};
 use sha2::Digest;
-use tracing::warn;
 
 use crate::lie_exchange;
 use crate::models::common::{

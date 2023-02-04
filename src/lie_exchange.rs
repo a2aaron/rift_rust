@@ -505,12 +505,18 @@ impl LieStateMachine {
     // implements the "PROCESS_LIE" procedure
     fn process_lie_procedure(
         &mut self,
+        // The address the incoming LIE packet was sent on.
         address: IpAddr,
+        // The header of the incoming LIE packet.
         lie_header: &PacketHeader,
+        // The body of the incoming LIE packet.
         lie_packet: &LIEPacket,
+        // The system ID of the socket that received the LIE.
         system_id: SystemID,
+        // The local link ID of the socket that received the LIE.
         local_link_id: LinkIDType,
-        mtu: MTUSizeType,
+        // The MTU of the socket that received the LIE.
+        socket_mtu: usize,
     ) {
         tracing::trace!("PROCESS_LIE procedure");
         let lie_level: Level = lie_header.level.into();
@@ -526,7 +532,7 @@ impl LieStateMachine {
             return;
         }
 
-        if lie_packet.link_mtu_size != Some(mtu) {
+        if lie_packet.link_mtu_size != Some(socket_mtu as MTUSizeType) {
             // 2. if LIE has non matching MTUs
             //    then CLEANUP, PUSH UpdateZTPOffer, PUSH MTUMismatch
             self.cleanup();
@@ -707,7 +713,9 @@ impl LieStateMachine {
     fn check_three_way(
         &mut self,
         packet: &LIEPacket,
+        // The system ID of the socket that that received the LIE.
         system_id: SystemID,
+        // The local link ID of the socket that received the LIE.
         local_link_id: LinkIDType,
     ) {
         match (self.lie_state, &packet.neighbor) {
@@ -753,7 +761,7 @@ impl LieStateMachine {
             name: node_info.node_name.clone(),
             local_id: socket.local_link_id as common::LinkIDType,
             flood_port: socket.flood_port() as common::UDPPortType,
-            link_mtu_size: Some(socket.mtu),
+            link_mtu_size: Some(socket.mtu as MTUSizeType),
             link_bandwidth: Some(DEFAULT_BANDWIDTH),
             neighbor,
             pod: None,
