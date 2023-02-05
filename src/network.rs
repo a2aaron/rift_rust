@@ -16,6 +16,7 @@ use crate::{
     },
     packet::{self, Nonce, OuterSecurityEnvelopeHeader, PacketNumber, SecretKeyStore},
     socket::{RecvPacketError, RecvPacketResult, RiftSocket},
+    tie_exchange::TieStateMachine,
     topology::{NodeDescription, SystemID, TopologyDescription},
 };
 
@@ -136,11 +137,18 @@ struct Link {
     link_socket: LinkSocket,
     /// The state machine for LIE exchange.
     lie_fsm: LieStateMachine,
+    /// The state machine for TIE exchange.
+    #[serde(skip)]
+    tie_fsm: TieStateMachine,
     /// Additional information about the link which doesn't really belong anywhere else.
     #[serde(flatten)]
     node_info: NodeInfo,
     #[serde(skip)]
+    // The timer used for sending TimerTick events periodically.
     last_timer_tick: Timer,
+    /// The timer used for doing TIDE generation and TIE sending periodically.
+    #[serde(skip)]
+    tie_timer: Timer,
 }
 
 impl Link {
@@ -164,8 +172,10 @@ impl Link {
                 common::DEFAULT_MTU_SIZE as usize,
             )?,
             lie_fsm: LieStateMachine::new(node_info.configured_level),
+            tie_fsm: TieStateMachine::new(),
             node_info,
             last_timer_tick: Timer::new(Duration::from_secs(1)),
+            tie_timer: Timer::new(Duration::from_secs(1)),
         })
     }
 
@@ -189,7 +199,9 @@ impl Link {
                     packet.header,
                     content,
                 )),
-                _ => (),
+                PacketContent::Tide(tide) => self.tie_fsm.process_tide(&tide),
+                PacketContent::Tire(tire) => self.tie_fsm.process_tire(&tire),
+                PacketContent::Tie(tie) => self.tie_fsm.process_tie(&tie),
             }
         }
 
@@ -200,6 +212,15 @@ impl Link {
 
         self.lie_fsm
             .process_external_events(&mut self.link_socket, &self.node_info, ztp_fsm)?;
+
+        if self.tie_timer.is_expired() {
+            self.tie_fsm.generate_tide();
+            self.tie_fsm.send_ties();
+            self.tie_timer.start();
+        }
+
+        self.tie_fsm.generate_tire();
+
         Ok(())
     }
 }

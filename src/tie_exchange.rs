@@ -1,7 +1,9 @@
-use crate::models::encoding::{PacketHeader, ProtocolPacket, TIEHeader, TIEPacket, TIEID};
+use crate::models::encoding::{
+    PacketHeader, ProtocolPacket, TIDEPacket, TIEHeader, TIEPacket, TIREPacket, TIEID,
+};
 
 /// I don't know if this actually makes sense to have
-struct TieStateMachine {
+pub struct TieStateMachine {
     /// Collection containing all the TIEs to transmit on the adjacency.
     transmit_ties: TieCollection,
     /// Collection containing all the TIEs that have to be acknowledged on the adjacency.
@@ -14,6 +16,39 @@ struct TieStateMachine {
 }
 
 impl TieStateMachine {
+    pub fn new() -> TieStateMachine {
+        TieStateMachine {
+            transmit_ties: TieCollection::new(),
+            acknoledge_ties: TieCollection::new(),
+            requested_ties: TieCollection::new(),
+            retransmit_ties: TieCollection::new(),
+        }
+    }
+
+    pub fn generate_tide(&mut self) {
+        todo!()
+    }
+
+    pub fn process_tide(&mut self, tide: &TIDEPacket) {
+        todo!()
+    }
+
+    pub fn generate_tire(&mut self) {
+        todo!()
+    }
+
+    pub fn process_tire(&mut self, tire: &TIREPacket) {
+        todo!()
+    }
+
+    pub fn process_tie(&mut self, tie: &TIEPacket) {
+        todo!()
+    }
+
+    pub fn send_ties(&mut self) {
+        todo!();
+    }
+
     /// returns whether a TIE can be flood reduced or not
     fn is_flood_reduced(&self, tie: &TIEPacket) -> bool {
         todo!()
@@ -104,6 +139,10 @@ impl TieStateMachine {
 struct TieCollection {}
 
 impl TieCollection {
+    fn new() -> TieCollection {
+        TieCollection {}
+    }
+
     fn insert(&mut self, tie: &TIEPacket) {
         todo!()
     }
