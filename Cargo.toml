@@ -13,6 +13,7 @@ serde = { version = "1.0.152", features = ["derive"] }
 serde_json = "1.0.91"
 serde_yaml = "0.9.16"
 sha2 = "0.10.6"
+thiserror = "1.0.38"
 # thrift = "0.17.0"
 thrift = { path = "thrift/lib/rs" }
 tracing = "0.1.37"

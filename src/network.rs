@@ -9,13 +9,13 @@ use rand::seq::index;
 use serde::Serialize;
 
 use crate::{
-    chaos::RiftSocket,
     lie_exchange::{self, LeafFlags, LieEvent, LieStateMachine, Timer, ZtpStateMachine},
     models::{
         common::{self, LinkIDType},
         encoding::{PacketContent, ProtocolPacket},
     },
     packet::{self, Nonce, OuterSecurityEnvelopeHeader, PacketNumber, SecretKeyStore},
+    socket::{RecvPacketError, RecvPacketResult, RiftSocket},
     topology::{NodeDescription, SystemID, TopologyDescription},
 };
 
@@ -50,7 +50,7 @@ impl Network {
     }
 
     /// Run the network, sending and receving packets to and from the nodes.
-    pub fn step(&mut self) -> io::Result<()> {
+    pub fn step(&mut self) -> Result<(), Box<dyn Error>> {
         for i in index::sample(&mut rand::thread_rng(), self.nodes.len(), self.nodes.len()) {
             let node = &mut self.nodes[i];
             node.step(&self.keys)?;
@@ -104,7 +104,7 @@ impl Node {
     }
 
     /// Run the node for one step.
-    fn step(&mut self, key: &SecretKeyStore) -> io::Result<()> {
+    fn step(&mut self, key: &SecretKeyStore) -> Result<(), Box<dyn Error>> {
         let _span =
             tracing::debug_span!("node_step", node_name = self.node_info.node_name,).entered();
 
@@ -169,24 +169,28 @@ impl Link {
         })
     }
 
-    pub fn step(&mut self, keys: &SecretKeyStore, ztp_fsm: &mut ZtpStateMachine) -> io::Result<()> {
+    pub fn step(
+        &mut self,
+        keys: &SecretKeyStore,
+        ztp_fsm: &mut ZtpStateMachine,
+    ) -> Result<(), Box<dyn Error>> {
         let _span = tracing::debug_span!(
             "link_step",
             node_name = self.node_info.node_name,
             link_name = self.link_socket.name,
         )
         .entered();
-        match self.link_socket.recv_packet(keys) {
-            RecvPacketResult::NoPacket => (),
-            RecvPacketResult::Packet { packet, address } => {
-                match packet.content {
-                    PacketContent::Lie(content) => self.lie_fsm.push_external_event(
-                        LieEvent::LieRcvd(address.ip(), packet.header, content),
-                    ),
-                    _ => (),
-                }
+
+        let packets = self.link_socket.recv_packets(keys)?;
+        for (packet, address) in packets {
+            match packet.content {
+                PacketContent::Lie(content) => self.lie_fsm.push_external_event(LieEvent::LieRcvd(
+                    address.ip(),
+                    packet.header,
+                    content,
+                )),
+                _ => (),
             }
-            RecvPacketResult::Err(err) => println!("Could not recv packet: {}", err),
         }
 
         if self.last_timer_tick.is_expired() {
@@ -210,7 +214,7 @@ pub struct LinkSocket {
     lie_tx_socket: Box<dyn RiftSocket>,
     /// The port that this link will receive TIE packets from.
     /// TODO: This should probably become a RiftSocket eventually.
-    tie_rx_addr: SocketAddr,
+    tie_rx_socket: Box<dyn RiftSocket>,
     /// The name of this link, typically specified by the topology description file
     pub name: String,
     /// The maximum transmissible unit size.
@@ -282,12 +286,16 @@ impl LinkSocket {
         // doesn't do anything other than default where `lie_tx_socket.send()` sends to by default.
         lie_tx_socket.connect(lie_tx_addr)?;
 
+        let tie_rx_socket = UdpSocket::bind(tie_rx_addr)?;
+        tie_rx_socket.set_nonblocking(true)?;
+        // TODO: does the TIE rx socket need to be on multicast?
+
         Ok(LinkSocket {
             name,
             local_link_id,
             lie_rx_socket: Box::new(lie_rx_socket),
             lie_tx_socket: Box::new(lie_tx_socket),
-            tie_rx_addr,
+            tie_rx_socket: Box::new(tie_rx_socket),
             mtu,
             packet_number: PacketNumber::from(1),
             weak_nonce_local: Nonce::from(1),
@@ -295,37 +303,42 @@ impl LinkSocket {
         })
     }
 
-    pub fn recv_packet(&mut self, keys: &SecretKeyStore) -> RecvPacketResult {
-        let mut bytes: Vec<u8> = vec![0; self.mtu];
-        match self.lie_rx_socket.recv_from(&mut bytes) {
-            Ok((length, address)) => {
-                // Check that the received number of bytes does fit within our MTU size (if it
-                // doesn't, then it's likely the packet is malformed and we shouldn't parse it.)
-                if length > self.mtu {
-                    return RecvPacketResult::Err(
-                        format!("Expected at most {} bytes, got {}", self.mtu, length).into(),
-                    );
-                }
-                // Remove excess zeros from bytes vector.
-                bytes.resize(length, 0u8);
-                match packet::parse_and_validate(&bytes, keys) {
-                    Ok((outer_header, _tie_header, packet)) => {
-                        // We set our remote to their local.
-                        self.weak_nonce_remote = outer_header.weak_nonce_local;
-                        RecvPacketResult::Packet { packet, address }
-                    }
-                    Err(err) => RecvPacketResult::Err(err.into()),
-                }
-            }
-            Err(err) => {
-                // On WouldBlock, simply say there was no packet instead of erroring.
-                if err.kind() == io::ErrorKind::WouldBlock {
-                    RecvPacketResult::NoPacket
-                } else {
-                    RecvPacketResult::Err(err.into())
-                }
-            }
+    pub fn recv_packets(
+        &mut self,
+        keys: &SecretKeyStore,
+    ) -> Result<Vec<(ProtocolPacket, SocketAddr)>, RecvPacketError> {
+        let mut buf = vec![0; self.mtu];
+
+        let mut packets = vec![];
+
+        let lie_result = self.lie_rx_socket.recv_packet(&mut buf, keys);
+
+        // We set our remote nonce to their local nonce we recieved.
+        if let RecvPacketResult::Packet {
+            outer_header,
+            packet,
+            address,
+        } = lie_result
+        {
+            self.weak_nonce_remote = outer_header.weak_nonce_local;
+            packets.push((packet, address));
+        } else if let RecvPacketResult::Err(err) = lie_result {
+            return Err(err);
         }
+
+        let tie_result = self.tie_rx_socket.recv_packet(&mut buf, keys);
+        if let RecvPacketResult::Packet {
+            outer_header,
+            packet,
+            address,
+        } = tie_result
+        {
+            self.weak_nonce_remote = outer_header.weak_nonce_local;
+            packets.push((packet, address));
+        } else if let RecvPacketResult::Err(err) = tie_result {
+            return Err(err);
+        }
+        Ok(packets)
     }
 
     pub fn send_packet(&mut self, packet: &ProtocolPacket) -> io::Result<usize> {
@@ -345,17 +358,8 @@ impl LinkSocket {
     }
 
     pub fn flood_port(&self) -> u16 {
-        self.tie_rx_addr.port()
+        self.tie_rx_socket.get().local_addr().unwrap().port()
     }
-}
-
-pub enum RecvPacketResult {
-    NoPacket,
-    Packet {
-        packet: ProtocolPacket,
-        address: SocketAddr,
-    },
-    Err(Box<dyn Error>),
 }
 
 /// A convience struct for keep track of node specific information.
