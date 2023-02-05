@@ -32,7 +32,7 @@ pub const LEAF_LEVEL: u8 = common::LEAF_LEVEL as u8;
 pub struct LieStateMachine {
     /// Determines if a link is logically present in the topology. If the LIEState is ThreeWay, then
     /// the link is logically present. Otherwise, it is not.
-    lie_state: LieState,
+    pub lie_state: LieState,
     #[serde(skip)]
     external_event_queue: VecDeque<LieEvent>,
     #[serde(skip)]

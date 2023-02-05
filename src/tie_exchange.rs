@@ -1,5 +1,25 @@
-use crate::models::encoding::{
-    PacketHeader, ProtocolPacket, TIDEPacket, TIEHeader, TIEPacket, TIREPacket, TIEID,
+use std::collections::BTreeMap;
+
+use crate::models::{
+    common::{self, TIETypeType, TieDirectionType},
+    encoding::{
+        PacketHeader, ProtocolPacket, TIDEPacket, TIEHeader, TIEHeaderWithLifeTime, TIEPacket,
+        TIREPacket, TIEID,
+    },
+};
+
+const MIN_TIEID: TIEID = TIEID {
+    direction: TieDirectionType::SOUTH,
+    originator: 0,
+    tietype: TIETypeType::T_I_E_TYPE_MIN_VALUE,
+    tie_nr: 0,
+};
+
+const MAX_TIEID: TIEID = TIEID {
+    direction: TieDirectionType::NORTH,
+    originator: common::SystemIDType::MAX,
+    tietype: TIETypeType::T_I_E_TYPE_MAX_VALUE,
+    tie_nr: common::TIENrType::MAX,
 };
 
 /// I don't know if this actually makes sense to have
@@ -13,6 +33,8 @@ pub struct TieStateMachine {
     /// Collection containing all TIEs that need retransmission with the according time to
     /// retransmit
     retransmit_ties: TieCollection,
+    /// Unsure what this actually is. Seems to be an ordered collection of TIEs?
+    tie_db: TieCollection,
 }
 
 impl TieStateMachine {
@@ -22,11 +44,80 @@ impl TieStateMachine {
             acknoledge_ties: TieCollection::new(),
             requested_ties: TieCollection::new(),
             retransmit_ties: TieCollection::new(),
+            tie_db: TieCollection::new(),
         }
     }
 
-    pub fn generate_tide(&mut self) {
-        todo!()
+    /// Implements section 4.2.3.3.1.2.1 TIDE Generation
+    /// 4.2.3.3.1.2.1. TIDE Generation
+    /// As given by timer constant, periodically generate TIDEs by:
+    ///     NEXT_TIDE_ID: ID of next TIE to be sent in TIDE.
+    ///     TIDE_START: Begin of TIDE packet range.
+    /// a. NEXT_TIDE_ID = MIN_TIEID
+    /// b. while NEXT_TIDE_ID not equal to MAX_TIEID do
+    ///     1. TIDE_START = NEXT_TIDE_ID
+    ///     2. HEADERS = At most TIRDEs_PER_PKT headers in TIEDB starting at NEXT_TIDE_ID or
+    ///        higher that SHOULD be filtered by is_tide_entry_filtered and MUST either have a
+    ///        lifetime left > 0 or have no content
+    ///     3. if HEADERS is empty then START = MIN_TIEID else START = first element in HEADERS
+    ///     4. if HEADERS' size less than TIRDEs_PER_PKT then END = MAX_TIEID else END = last
+    ///         element in HEADERS
+    ///     5. send *sorted* HEADERS as TIDE setting START and END as its range
+    ///     6. NEXT_TIDE_ID = END
+    /// The constant `TIRDEs_PER_PKT` SHOULD be computed per interface and used by the
+    /// implementation to limit the amount of TIE headers per TIDE so the sent TIDE PDU does not
+    /// exceed interface MTU.
+    /// TIDE PDUs SHOULD be spaced on sending to prevent packet drops
+    pub fn generate_tide(&mut self, tirdes_per_pkt: usize) -> Vec<TIDEPacket> {
+        fn positive_lifetime(tie: &TIEPacket) -> bool {
+            todo!()
+        }
+
+        fn no_content(tie: &TIEPacket) -> bool {
+            todo!()
+        }
+        let mut tides = vec![];
+
+        let mut next_tide_id = MIN_TIEID;
+        while next_tide_id != MAX_TIEID {
+            let mut headers = self
+                .tie_db
+                .ties
+                .range(&next_tide_id..)
+                .filter(|(_, tie)| self.is_tide_entry_filtered(tie))
+                .filter(|(_, tie)| positive_lifetime(tie) || no_content(tie))
+                .take(tirdes_per_pkt)
+                .collect::<Vec<_>>();
+            headers.sort();
+
+            let start = if headers.is_empty() {
+                MIN_TIEID
+            } else {
+                headers.first().unwrap().0.clone()
+            };
+
+            let end = if headers.len() < tirdes_per_pkt {
+                MAX_TIEID
+            } else {
+                headers.last().unwrap().0.clone()
+            };
+
+            let tide = TIDEPacket {
+                start_range: start,
+                end_range: end.clone(),
+                headers: headers
+                    .iter()
+                    .map(|(_, tie)| TIEHeaderWithLifeTime {
+                        header: tie.header.clone(),
+                        remaining_lifetime: todo!(),
+                    })
+                    .collect(),
+            };
+
+            tides.push(tide);
+            next_tide_id = end;
+        }
+        tides
     }
 
     pub fn process_tide(&mut self, tide: &TIDEPacket) {
@@ -136,11 +227,17 @@ impl TieStateMachine {
     // the one in TIE
 }
 
-struct TieCollection {}
+struct TieCollection {
+    // TODO: The TIEID Ord implementation is probably wrong. You will need to use a wrapper struct
+    // and implement one manually. Check Section 4.2.3.3 for the specification.
+    ties: BTreeMap<TIEID, TIEPacket>,
+}
 
 impl TieCollection {
     fn new() -> TieCollection {
-        TieCollection {}
+        TieCollection {
+            ties: BTreeMap::new(),
+        }
     }
 
     fn insert(&mut self, tie: &TIEPacket) {

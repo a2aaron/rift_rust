@@ -157,6 +157,19 @@ Suppose node A is a leaf received a LIE from node B that is level 23. Let node A
 # TIE Exchange
 - why is there `tie_been_acked` and `remove_from_all_queues` if they do the same thing??
 
+- MAX_TIEID states that it's constants are the following:
+```
+TIE Key with maximal values:
+TIEID(originator=MAX_UINT64,
+tietype=TIETypeMaxValue, tie_nr=MAX_UINT64,
+direction=North)
+```
+However, Thrift does not have unsigned integers (the best we can do are signed 64bit integers), so assigning `originator` a value of `MAX_UINT64` is impossible. Additionally, `tie_nr` is actually a 32bit signed integer, so assigning it a value of `MAX_UINT64` is even more impossible.
+- what the heck is "TIEDB"? it only shows up in TIDE Generation (Section 4.2.3.3.1.2.1)
+- Section 4.2.3.3.1.1 FloodState Structure per Adjacency: "The structure contains conceptually on each adjacency the following elements." should probably be instead: "Conceptually, each adjacency contains a structure with the following elements."
+
+- Section 4.2.34.2.3.3.1.2.1. TIDE Generation
+In the pseudocode, the variable `TIDE_START` is defined but not used anywhere.
 
 # Rift Python
 - two_by_two_by_two_ztp.yaml has `level: superspine`. However, this does not appear to be a real named level value, and attempting to get rift-python to parse the file results in an error.

@@ -9,7 +9,7 @@ use rand::seq::index;
 use serde::Serialize;
 
 use crate::{
-    lie_exchange::{self, LeafFlags, LieEvent, LieStateMachine, Timer, ZtpStateMachine},
+    lie_exchange::{self, LeafFlags, LieEvent, LieState, LieStateMachine, Timer, ZtpStateMachine},
     models::{
         common::{self, LinkIDType},
         encoding::{PacketContent, ProtocolPacket},
@@ -199,9 +199,21 @@ impl Link {
                     packet.header,
                     content,
                 )),
-                PacketContent::Tide(tide) => self.tie_fsm.process_tide(&tide),
-                PacketContent::Tire(tire) => self.tie_fsm.process_tire(&tire),
-                PacketContent::Tie(tie) => self.tie_fsm.process_tie(&tie),
+                PacketContent::Tide(tide) => {
+                    if self.lie_fsm.lie_state == LieState::ThreeWay {
+                        self.tie_fsm.process_tide(&tide)
+                    }
+                }
+                PacketContent::Tire(tire) => {
+                    if self.lie_fsm.lie_state == LieState::ThreeWay {
+                        self.tie_fsm.process_tire(&tire)
+                    }
+                }
+                PacketContent::Tie(tie) => {
+                    if self.lie_fsm.lie_state == LieState::ThreeWay {
+                        self.tie_fsm.process_tie(&tie)
+                    }
+                }
             }
         }
 
@@ -213,13 +225,16 @@ impl Link {
         self.lie_fsm
             .process_external_events(&mut self.link_socket, &self.node_info, ztp_fsm)?;
 
-        if self.tie_timer.is_expired() {
-            self.tie_fsm.generate_tide();
-            self.tie_fsm.send_ties();
-            self.tie_timer.start();
-        }
+        if self.lie_fsm.lie_state == LieState::ThreeWay {
+            if self.tie_timer.is_expired() {
+                self.tie_timer.start();
+                self.tie_fsm
+                    .generate_tide(self.link_socket.tirdes_per_pkt());
+                self.tie_fsm.send_ties();
+            }
 
-        self.tie_fsm.generate_tire();
+            self.tie_fsm.generate_tire();
+        }
 
         Ok(())
     }
@@ -380,6 +395,13 @@ impl LinkSocket {
 
     pub fn flood_port(&self) -> u16 {
         self.tie_rx_socket.get().local_addr().unwrap().port()
+    }
+
+    /// The constant `TIRDEs_PER_PKT` SHOULD be computed per interface and used by the
+    /// implementation to limit the amount of TIE headers per TIDE so the sent TIDE PDU does not
+    /// exceed interface MTU
+    fn tirdes_per_pkt(&self) -> usize {
+        5 // TODO: i made up this number
     }
 }
 
