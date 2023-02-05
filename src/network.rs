@@ -5,11 +5,11 @@ use std::{
     time::Duration,
 };
 
-use rand::seq::{index, SliceRandom};
+use rand::seq::index;
 use serde::Serialize;
 
 use crate::{
-    chaos::{ChaosSocket, RiftSocket},
+    chaos::RiftSocket,
     lie_exchange::{self, LeafFlags, LieEvent, LieStateMachine, Timer, ZtpStateMachine},
     models::{
         common::{self, LinkIDType},
@@ -91,6 +91,7 @@ impl Node {
                     link_desc.name.clone(),
                     link_desc.lie_rx_addr(),
                     link_desc.lie_tx_addr(),
+                    link_desc.tie_rx_addr(),
                 )
             })
             .collect::<io::Result<_>>()?;
@@ -151,6 +152,7 @@ impl Link {
         link_name: String,
         lie_rx_addr: SocketAddr,
         lie_tx_addr: SocketAddr,
+        tie_rx_addr: SocketAddr,
     ) -> io::Result<Link> {
         Ok(Link {
             link_socket: LinkSocket::new(
@@ -158,6 +160,7 @@ impl Link {
                 local_link_id,
                 lie_rx_addr,
                 lie_tx_addr,
+                tie_rx_addr,
                 common::DEFAULT_MTU_SIZE as usize,
             )?,
             lie_fsm: LieStateMachine::new(node_info.configured_level),
@@ -205,6 +208,9 @@ pub struct LinkSocket {
     lie_rx_socket: Box<dyn RiftSocket>,
     /// The socket that this link will send LIE packets to.
     lie_tx_socket: Box<dyn RiftSocket>,
+    /// The port that this link will receive TIE packets from.
+    /// TODO: This should probably become a RiftSocket eventually.
+    tie_rx_addr: SocketAddr,
     /// The name of this link, typically specified by the topology description file
     pub name: String,
     /// The maximum transmissible unit size.
@@ -240,6 +246,7 @@ impl LinkSocket {
         local_link_id: LinkIDType,
         lie_rx_addr: SocketAddr,
         lie_tx_addr: SocketAddr,
+        tie_rx_addr: SocketAddr,
         mtu: usize,
     ) -> io::Result<LinkSocket> {
         let _span = tracing::info_span!("LinkSocket::new", interface = name).entered();
@@ -280,6 +287,7 @@ impl LinkSocket {
             local_link_id,
             lie_rx_socket: Box::new(lie_rx_socket),
             lie_tx_socket: Box::new(lie_tx_socket),
+            tie_rx_addr,
             mtu,
             packet_number: PacketNumber::from(1),
             weak_nonce_local: Nonce::from(1),
@@ -337,8 +345,7 @@ impl LinkSocket {
     }
 
     pub fn flood_port(&self) -> u16 {
-        // TODO
-        0
+        self.tie_rx_addr.port()
     }
 }
 
