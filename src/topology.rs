@@ -7,9 +7,10 @@ use sha2::Digest;
 
 use crate::lie_exchange;
 use crate::models::common::{
-    self, DEFAULT_LIE_UDP_PORT, DEFAULT_TIE_UDP_FLOOD_PORT, LEAF_LEVEL, TOP_OF_FABRIC_LEVEL,
+    DEFAULT_LIE_UDP_PORT, DEFAULT_TIE_UDP_FLOOD_PORT, LEAF_LEVEL, TOP_OF_FABRIC_LEVEL,
 };
 use crate::packet::SecretKeyStore;
+use crate::wrapper::SystemID;
 
 // 224.0.0.120
 const DEFAULT_LIE_IPV4_MCAST_ADDRESS: Ipv4Addr = Ipv4Addr::new(224, 0, 0, 120);
@@ -333,15 +334,6 @@ pub enum NamedLevel {
     Leaf,
     LeafToLeaf,
     TopOfFabric,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
-pub struct SystemID(u64);
-
-impl SystemID {
-    pub fn get(&self) -> common::SystemIDType {
-        self.0 as common::SystemIDType
-    }
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]

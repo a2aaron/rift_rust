@@ -20,7 +20,7 @@ use crate::{
         },
     },
     network::{LinkSocket, NodeInfo},
-    topology::SystemID,
+    wrapper::SystemID,
 };
 
 pub const LEAF_LEVEL: u8 = common::LEAF_LEVEL as u8;
@@ -863,15 +863,19 @@ impl LieStateMachine {
             } else {
                 Level::Undefined
             };
-            let offer = Offer {
-                level,
-                system_id: header.sender,
-                state: self.lie_state,
-                expired: false,
-            };
+            if let Ok(system_id) = header.sender.try_into() {
+                let offer = Offer {
+                    level,
+                    system_id,
+                    state: self.lie_state,
+                    expired: false,
+                };
 
-            tracing::trace!(offer =? offer, "Sending offer to ZTP FSM");
-            ztp_fsm.push_external_event(ZtpEvent::NeighborOffer(offer))
+                tracing::trace!(offer =? offer, "Sending offer to ZTP FSM");
+                ztp_fsm.push_external_event(ZtpEvent::NeighborOffer(offer))
+            } else {
+                tracing::error!(system_id =? header.sender, "Cannot send offer to ZTP FSM (illegal System ID)");
+            }
         } else {
             tracing::trace!("Ignoring send_offer call (last_valid_lie is None)");
         }
@@ -1017,7 +1021,7 @@ pub struct ZtpStateMachine {
     chained_event_queue: VecDeque<ZtpEvent>,
     configured_level: Level,
     leaf_flags: LeafFlags,
-    offers: HashMap<SystemIDType, Offer>,
+    offers: HashMap<SystemID, Offer>,
     #[serde(skip)]
     holddown_timer: Timer,
     highest_available_level: Level,
@@ -1440,7 +1444,7 @@ impl ZtpStateMachine {
     // Attempt to expire an offer by the given system ID. Returns false if the ID is not there or if
     // the offer is already expired, and true otherwise.
     pub fn expire_offer_by_id(&mut self, system_id: SystemID) -> bool {
-        match self.offers.get_mut(&system_id.get()) {
+        match self.offers.get_mut(&system_id) {
             Some(offer) => {
                 offer.expired = true;
                 true
@@ -1523,7 +1527,7 @@ impl ZtpEvent {
 #[derive(Debug, Clone, Hash, PartialEq, Eq, Serialize)]
 pub struct Offer {
     level: Level,
-    system_id: SystemIDType,
+    system_id: SystemID,
     state: LieState,
     expired: bool,
 }

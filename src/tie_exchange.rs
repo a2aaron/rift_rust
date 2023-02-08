@@ -1,11 +1,14 @@
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, error::Error};
 
-use crate::models::{
-    common::{self, TIETypeType, TieDirectionType},
-    encoding::{
-        PacketHeader, ProtocolPacket, TIDEPacket, TIEHeader, TIEHeaderWithLifeTime, TIEPacket,
-        TIREPacket, TIEID,
+use crate::{
+    models::{
+        common::{self, TIETypeType, TieDirectionType},
+        encoding::{
+            PacketHeader, ProtocolPacket, TIDEPacket, TIEHeader, TIEHeaderWithLifeTime, TIEPacket,
+            TIREPacket, TIEID,
+        },
     },
+    wrapper::SystemID,
 };
 
 const MIN_TIEID: TIEID = TIEID {

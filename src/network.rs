@@ -17,7 +17,8 @@ use crate::{
     packet::{self, Nonce, OuterSecurityEnvelopeHeader, PacketNumber, SecretKeyStore},
     socket::{RecvPacketError, RecvPacketResult, RiftSocket},
     tie_exchange::TieStateMachine,
-    topology::{NodeDescription, SystemID, TopologyDescription},
+    topology::{NodeDescription, TopologyDescription},
+    wrapper::SystemID,
 };
 
 /// Represents a network of nodes.
