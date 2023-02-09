@@ -1,4 +1,7 @@
-use std::{collections::BTreeMap, error::Error};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    error::Error,
+};
 
 use crate::{
     models::{
@@ -280,8 +283,30 @@ impl TieStateMachine {
         Ok(())
     }
 
-    pub fn generate_tire(&mut self) {
-        todo!()
+    /// 4.2.3.3.1.3.1. TIRE Generation
+    /// Elements from both TIES_REQ and TIES_ACK MUST be collected and sent out as fast as feasible
+    /// as TIREs. When sending TIREs with elements from TIES_REQ the `remaining_lifetime` field in
+    /// `TIEHeaderWithLifeTime` MUST be set to 0 to force reflooding from the neighbor even if the
+    /// TIEs seem to be same.
+    pub fn generate_tire(&mut self) -> TIREPacket {
+        let mut headers = BTreeSet::new();
+        for (id, packet) in &self.requested_ties.ties {
+            let header = TIEHeaderWithLifeTime {
+                header: todo!(),
+                remaining_lifetime: 0,
+            };
+            headers.insert(header);
+        }
+
+        for tie in &self.acknoledge_ties.ties {
+            let header = TIEHeaderWithLifeTime {
+                header: todo!(),
+                remaining_lifetime: todo!(),
+            };
+            headers.insert(header);
+        }
+
+        TIREPacket { headers }
     }
 
     /// 4.2.3.3.1.3.2. TIRE Processing
