@@ -284,8 +284,61 @@ impl TieStateMachine {
         todo!()
     }
 
+    /// 4.2.3.3.1.3.2. TIRE Processing
+    /// On reception of TIREs the following processing is performed:
+    ///     TXKEYS: Collection of TIE Headers to be send after processing of the packet
+    ///     REQKEYS: Collection of TIEIDs to be requested after processing of the packet
+    ///     ACKKEYS: Collection of TIEIDs that have been acked
+    ///     DBTIE: TIE in the LSDB if found
+    /// a. for every HEADER in TIRE do
+    ///     1. DBTIE = find HEADER in current LSDB
+    ///     2. if DBTIE not found then do nothing
+    ///     3. if DBTIE.HEADER < HEADER then put HEADER into REQKEYS
+    ///     4. if DBTIE.HEADER > HEADER then put DBTIE.HEADER into TXKEYS
+    ///     5. if DBTIE.HEADER = HEADER then put DBTIE.HEADER into ACKKEYS
+    /// b. for all TIEs in TXKEYS try_to_transmit_tie(TIE)
+    /// c. for all TIEs in REQKEYS request_tie(TIE)
+    /// d. for all TIEs in ACKKEYS tie_been_acked(TIE)
     pub fn process_tire(&mut self, tire: &TIREPacket) {
-        todo!()
+        let mut req_keys = vec![];
+        let mut tx_keys = vec![];
+        let mut ack_keys = vec![];
+        // a. for every HEADER in TIRE do
+        for tire_header in &tire.headers {
+            // 1. DBTIE = find HEADER in current LSDB
+            let db_tie = self.ls_db.find(&tire_header.header);
+            // 2. if DBTIE not found then do nothing
+            if let Some(db_tie) = db_tie {
+                if db_tie.header < tire_header.header {
+                    // 3. if DBTIE.HEADER < HEADER then put HEADER into REQKEYS
+                    req_keys.push(tire_header);
+                } else if db_tie.header > tire_header.header {
+                    // 4. if DBTIE.HEADER > HEADER then put DBTIE.HEADER into TXKEYS
+                    tx_keys.push(db_tie.header);
+                } else {
+                    // 5. if DBTIE.HEADER = HEADER then put DBTIE.HEADER into ACKKEYS
+                    ack_keys.push(db_tie.header);
+                }
+            }
+        }
+
+        // b. for all TIEs in TXKEYS try_to_transmit_tie(TIE)
+        for tie in tx_keys {
+            todo!();
+            // self.try_to_transmit_tie(tie);
+        }
+
+        // c. for all TIEs in REQKEYS request_tie(TIE)
+        for tie in req_keys {
+            todo!();
+            // self.request_tie(tie);
+        }
+
+        // d. for all TIEs in ACKKEYS tie_been_acked(TIE)
+        for tie in ack_keys {
+            todo!();
+            // self.tie_been_acked(tie);
+        }
     }
 
     pub fn process_tie(&mut self, tie: &TIEPacket) {
