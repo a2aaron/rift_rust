@@ -38,6 +38,7 @@ pub struct TieStateMachine {
     retransmit_ties: TieCollection,
     /// Unsure what this actually is. Seems to be an ordered collection of TIEs?
     tie_db: TieCollection,
+    ls_db: LinkStateDatabase,
 }
 
 impl TieStateMachine {
@@ -48,6 +49,7 @@ impl TieStateMachine {
             requested_ties: TieCollection::new(),
             retransmit_ties: TieCollection::new(),
             tie_db: TieCollection::new(),
+            ls_db: LinkStateDatabase::new(),
         }
     }
 
@@ -76,9 +78,6 @@ impl TieStateMachine {
             todo!()
         }
 
-        fn no_content(tie: &TIEPacket) -> bool {
-            todo!()
-        }
         let mut tides = vec![];
 
         let mut next_tide_id = MIN_TIEID;
@@ -88,7 +87,7 @@ impl TieStateMachine {
                 .ties
                 .range(&next_tide_id..)
                 .filter(|(_, tie)| self.is_tide_entry_filtered(tie))
-                .filter(|(_, tie)| positive_lifetime(tie) || no_content(tie))
+                .filter(|(_, tie)| positive_lifetime(tie) || !tie_has_content(tie))
                 .take(tirdes_per_pkt)
                 .collect::<Vec<_>>();
             headers.sort();
@@ -123,8 +122,147 @@ impl TieStateMachine {
         tides
     }
 
-    pub fn process_tide(&mut self, tide: &TIDEPacket) {
-        todo!()
+    /// Implements Section 4.2.3.3.1.2.2. TIDE Processing
+    /// On reception of TIDEs the following processing is performed:
+    ///     TXKEYS: Collection of TIE Headers to be sent after processing of the packet
+    ///     REQKEYS: Collection of TIEIDs to be requested after processing of the packet
+    ///     CLEARKEYS: Collection of TIEIDs to be removed from flood state queues
+    ///     LASTPROCESSED: Last processed TIEID in TIDE
+    ///     DBTIE: TIE in the LSDB if found
+    /// a. LASTPROCESSED = TIDE.start_range
+    /// b. for every HEADER in TIDE do
+    ///     1. DBTIE = find HEADER in current LSDB
+    ///     2. if HEADER < LASTPROCESSED then report error and reset adjacency and return
+    ///     3. put all TIEs in LSDB where (TIE.HEADER > LASTPROCESSED and TIE.HEADER < HEADER) into
+    ///        TXKEYS
+    ///     4. LASTPROCESSED = HEADER
+    ///     5. if DBTIE not found then
+    ///         I) if originator is this node then bump_own_tie
+    ///         II) else put HEADER into REQKEYS
+    ///     6. if DBTIE.HEADER < HEADER then
+    ///         I) if originator is this node then bump_own_tie else
+    ///             i. if this is a North TIE header from a northbound neighbor then override DBTIE
+    ///                in LSDB with HEADER
+    ///             ii. else put HEADER into REQKEYS
+    ///     7. if DBTIE.HEADER > HEADER then put DBTIE.HEADER into TXKEYS
+    ///     8. if DBTIE.HEADER = HEADER then
+    ///         I) if DBTIE has content already then put DBTIE.HEADER into CLEARKEYS
+    ///         II) else put HEADER into REQKEYS
+    /// c. put all TIEs in LSDB where (TIE.HEADER > LASTPROCESSED and TIE.HEADER <= TIDE.end_range
+    ///    into TXKEYS
+    /// d. for all TIEs in TXKEYS try_to_transmit_tie(TIE)
+    /// e. for all TIEs in REQKEYS request_tie(TIE)
+    /// f. for all TIEs in CLEARKEYS remove_from_all_queues(TIE)
+    pub fn process_tide(
+        &mut self,
+        node_id: SystemID,
+        packet_header: &PacketHeader,
+        tide: &TIDEPacket,
+    ) -> Result<(), Box<dyn Error>> {
+        let originator_is_this_node = packet_header.sender == node_id.into();
+
+        let mut req_keys = vec![];
+        let mut tx_keys = vec![];
+        let mut clear_keys = vec![];
+
+        // a. LASTPROCESSED = TIDE.start_range
+        let mut last_processed = &tide.start_range;
+
+        // b. for every HEADER in TIDE do
+        for tide_header in &tide.headers {
+            // 1. DBTIE = find HEADER in current LSDB
+            let db_tie = self.ls_db.find(&tide_header.header);
+
+            // 2. if HEADER < LASTPROCESSED then report error and reset adjacency and return
+            // TODO: TIEID comparision here is likely doing the wrong thing!
+            if &tide_header.header.tieid < last_processed {
+                // TODO: reset adjacency
+                return Err("HEADER < LASTPROCESSED".into());
+            }
+
+            // 3. put all TIEs in LSDB where (TIE.HEADER > LASTPROCESSED and TIE.HEADER < HEADER) into TXKEYS
+            // TODO: Interpreting "put all TIEs ... into TXKEYS" as "put all TIE.HEADERs ... into TXKEYS"
+            for (_, tie) in &self.ls_db.ties {
+                if &tie.header.tieid > last_processed
+                    && &tie.header.tieid < &tide_header.header.tieid
+                {
+                    tx_keys.push(tie.header.clone());
+                }
+            }
+
+            // 4. LASTPROCESSED = HEADER
+            last_processed = &tide_header.header.tieid;
+
+            match db_tie {
+                None => {
+                    // 5. if DBTIE not found then
+                    if originator_is_this_node {
+                        // I) if originator is this node then bump_own_tie
+                        self.bump_own_tie(todo!())
+                    } else {
+                        // II) else put HEADER into REQKEYS
+                        req_keys.push(tide_header);
+                    }
+                }
+                Some(db_tie) => {
+                    // 6. if DBTIE.HEADER < HEADER then
+                    if db_tie.header < tide_header.header {
+                        if originator_is_this_node {
+                            // I) if originator is this node then bump_own_tie else
+                            self.bump_own_tie(todo!());
+                        } else {
+                            // i. if this is a North TIE header from a northbound neighbor then
+                            //    override DBTIE in LSDB with HEADER
+                            if todo!() {
+                                self.ls_db.replace(db_tie, tide_header.header);
+                            } else {
+                                // ii. else put HEADER into REQKEYS
+                                req_keys.push(tide_header);
+                            }
+                        }
+                    } else if db_tie.header > tide_header.header {
+                        // 7. if DBTIE.HEADER > HEADER then put DBTIE.HEADER into TXKEYS
+                        tx_keys.push(db_tie.header)
+                    } else {
+                        // 8. if DBTIE.HEADER = HEADER then
+                        if tie_has_content(&db_tie) {
+                            // I) if DBTIE has content already then put DBTIE.HEADER into CLEARKEYS
+                            clear_keys.push(db_tie.header);
+                        } else {
+                            // II) else put HEADER into REQKEYS
+                            req_keys.push(tide_header);
+                        }
+                    }
+                }
+            }
+        }
+
+        // c. put all TIEs in LSDB where (TIE.HEADER > LASTPROCESSED and TIE.HEADER <= TIDE.end_range
+        //    into TXKEYS
+        for (_, tie) in &self.ls_db.ties {
+            if &tie.header.tieid > last_processed && &tie.header.tieid < &tide.end_range {
+                tx_keys.push(tie.header.clone());
+            }
+        }
+
+        // d. for all TIEs in TXKEYS try_to_transmit_tie(TIE)
+        for tie in tx_keys {
+            todo!();
+            // self.try_to_transmit_tie(tie);
+        }
+
+        // e. for all TIEs in REQKEYS request_tie(TIE)
+        for tie in req_keys {
+            todo!();
+            // self.request_tie(tie);
+        }
+
+        // f. for all TIEs in CLEARKEYS remove_from_all_queues(TIE)
+        for tie in clear_keys {
+            todo!();
+            // self.remove_from_all_queues(tie)
+        }
+        Ok(())
     }
 
     pub fn generate_tire(&mut self) {
@@ -228,6 +366,30 @@ impl TieStateMachine {
         todo!()
     }
     // the one in TIE
+}
+
+fn tie_has_content(db_tie: &TIEPacket) -> bool {
+    todo!()
+}
+
+struct LinkStateDatabase {
+    ties: BTreeMap<TIEID, TIEPacket>,
+}
+
+impl LinkStateDatabase {
+    fn new() -> LinkStateDatabase {
+        LinkStateDatabase {
+            ties: BTreeMap::new(),
+        }
+    }
+
+    fn find(&self, header: &TIEHeader) -> Option<TIEPacket> {
+        todo!()
+    }
+
+    fn replace(&self, db_header: TIEPacket, header: TIEHeader) {
+        todo!()
+    }
 }
 
 struct TieCollection {

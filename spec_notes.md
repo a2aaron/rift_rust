@@ -168,8 +168,12 @@ However, Thrift does not have unsigned integers (the best we can do are signed 6
 - what the heck is "TIEDB"? it only shows up in TIDE Generation (Section 4.2.3.3.1.2.1)
 - Section 4.2.3.3.1.1 FloodState Structure per Adjacency: "The structure contains conceptually on each adjacency the following elements." should probably be instead: "Conceptually, each adjacency contains a structure with the following elements."
 
-- Section 4.2.34.2.3.3.1.2.1. TIDE Generation
+- Section 4.2.3.3.1.2.1. TIDE Generation
 In the pseudocode, the variable `TIDE_START` is defined but not used anywhere.
+
+- Section 4.2.3.3.1.2.2  TIDE Processing
+    - `REQKEYS` and `CLEARKEYS` are collections of `TIEID`s but seemingly have TieHeaders inserted into them?
+    - What am i calling `bump_own_tie` on?
 
 - Section 4.2.3.3 Flooding
 ```

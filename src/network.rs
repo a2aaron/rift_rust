@@ -202,7 +202,13 @@ impl Link {
                 )),
                 PacketContent::Tide(tide) => {
                     if self.lie_fsm.lie_state == LieState::ThreeWay {
-                        self.tie_fsm.process_tide(&tide)
+                        if let Err(err) = self.tie_fsm.process_tide(
+                            self.node_info.system_id,
+                            &packet.header,
+                            &tide,
+                        ) {
+                            tracing::error!(tide =? tide, err =? err, "Error while processing TIDE");
+                        }
                     }
                 }
                 PacketContent::Tire(tire) => {
