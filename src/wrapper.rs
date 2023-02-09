@@ -150,17 +150,13 @@ impl From<TIESubtype> for common::TIETypeType {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-struct TieNumber {
-    value: u32,
-}
+struct TieNumber(u32);
 impl TryFrom<common::TIENrType> for TieNumber {
     type Error = String;
 
     fn try_from(value: common::TIENrType) -> Result<Self, Self::Error> {
         if value >= 0 {
-            Ok(TieNumber {
-                value: value as u32,
-            })
+            Ok(TieNumber(value as u32))
         } else {
             Err(format!(
                 "Illegal TIENrType value. (Expected positive value, got {})",
@@ -171,7 +167,7 @@ impl TryFrom<common::TIENrType> for TieNumber {
 }
 impl From<TieNumber> for common::TIENrType {
     fn from(value: TieNumber) -> Self {
-        value.value as common::TIENrType
+        value.0 as common::TIENrType
     }
 }
 
@@ -180,13 +176,6 @@ impl From<TieNumber> for common::TIENrType {
 /// adjacencies or describing its topology. RIFT System IDs can be auto-derived or configured.
 #[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SystemID(u64);
-
-impl SystemID {
-    /// Get the inner type as a `common::SystemIDType`
-    pub fn get(&self) -> common::SystemIDType {
-        self.0 as common::SystemIDType
-    }
-}
 
 impl TryFrom<common::SystemIDType> for SystemID {
     type Error = String;
@@ -208,6 +197,6 @@ impl TryFrom<common::SystemIDType> for SystemID {
 
 impl From<SystemID> for common::SystemIDType {
     fn from(value: SystemID) -> Self {
-        value.get()
+        value.0 as common::SystemIDType
     }
 }

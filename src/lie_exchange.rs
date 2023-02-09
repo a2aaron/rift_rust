@@ -525,7 +525,7 @@ impl LieStateMachine {
         //       system ID equal to this node's system ID or `IllegalSystemID`
         //    then CLEANUP
         if lie_header.major_version != PROTOCOL_MAJOR_VERSION
-            || lie_header.sender == system_id.get()
+            || lie_header.sender == system_id.into()
             || lie_header.sender == ILLEGAL_SYSTEM_I_D
         {
             self.cleanup();
@@ -722,7 +722,7 @@ impl LieStateMachine {
             (LieState::OneWay, _) => (),
             (LieState::TwoWay, None) => (),
             (LieState::TwoWay, Some(neighbor)) => {
-                if neighbor.originator == system_id.get() && neighbor.remote_id == local_link_id {
+                if neighbor.originator == system_id.into() && neighbor.remote_id == local_link_id {
                     self.push(LieEvent::ValidReflection);
                 } else {
                     self.push(LieEvent::MultipleNeighbors);
@@ -752,7 +752,7 @@ impl LieStateMachine {
         let header = PacketHeader {
             major_version: PROTOCOL_MAJOR_VERSION,
             minor_version: PROTOCOL_MINOR_VERSION,
-            sender: node_info.system_id.get(),
+            sender: node_info.system_id.into(),
             level: self.level.into(),
         };
 
