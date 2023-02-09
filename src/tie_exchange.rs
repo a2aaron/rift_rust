@@ -79,9 +79,17 @@ impl TieStateMachine {
         }
 
         let mut tides = vec![];
-
+        // a. NEXT_TIDE_ID = MIN_TIEID
         let mut next_tide_id = MIN_TIEID;
+
+        // b. while NEXT_TIDE_ID not equal to MAX_TIEID do
         while next_tide_id != MAX_TIEID {
+            // 1. TIDE_START = NEXT_TIDE_ID
+            // TODO: This is omitted, because I can't figure out where "TIDE_START" is used.
+
+            // 2. HEADERS = At most TIRDEs_PER_PKT headers in TIEDB starting at NEXT_TIDE_ID or
+            //    higher that SHOULD be filtered by is_tide_entry_filtered and MUST either have a
+            //    lifetime left > 0 or have no content
             let mut headers = self
                 .tie_db
                 .ties
@@ -90,20 +98,26 @@ impl TieStateMachine {
                 .filter(|(_, tie)| positive_lifetime(tie) || !tie_has_content(tie))
                 .take(tirdes_per_pkt)
                 .collect::<Vec<_>>();
+            // Sorting done here so that "first element" and "last element" hopefully correspond to
+            // to smallest and largest elements of the vector.
             headers.sort();
 
+            // 3. if HEADERS is empty then START = MIN_TIEID else START = first element in HEADERS
             let start = if headers.is_empty() {
                 MIN_TIEID
             } else {
                 headers.first().unwrap().0.clone()
             };
 
+            // 4. if HEADERS' size less than TIRDEs_PER_PKT then END = MAX_TIEID else END = last
+            //     element in HEADERS
             let end = if headers.len() < tirdes_per_pkt {
                 MAX_TIEID
             } else {
                 headers.last().unwrap().0.clone()
             };
 
+            // 5. send *sorted* HEADERS as TIDE setting START and END as its range
             let tide = TIDEPacket {
                 start_range: start,
                 end_range: end.clone(),
@@ -115,8 +129,9 @@ impl TieStateMachine {
                     })
                     .collect(),
             };
-
             tides.push(tide);
+
+            // 6. NEXT_TIDE_ID = END
             next_tide_id = end;
         }
         tides
