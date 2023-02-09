@@ -194,6 +194,9 @@ impl Link {
 
         let packets = self.link_socket.recv_packets(keys)?;
         for (packet, address) in packets {
+            // True if this node is the orignator of the packet. This is needed for Process TIDE and
+            // Process TIE.
+            let is_originator = packet.header.sender == self.node_info.system_id.into();
             match packet.content {
                 PacketContent::Lie(content) => self.lie_fsm.push_external_event(LieEvent::LieRcvd(
                     address.ip(),
@@ -202,11 +205,7 @@ impl Link {
                 )),
                 PacketContent::Tide(tide) => {
                     if self.lie_fsm.lie_state == LieState::ThreeWay {
-                        if let Err(err) = self.tie_fsm.process_tide(
-                            self.node_info.system_id,
-                            &packet.header,
-                            &tide,
-                        ) {
+                        if let Err(err) = self.tie_fsm.process_tide(is_originator, &tide) {
                             tracing::error!(tide =? tide, err =? err, "Error while processing TIDE");
                         }
                     }
@@ -218,7 +217,7 @@ impl Link {
                 }
                 PacketContent::Tie(tie) => {
                     if self.lie_fsm.lie_state == LieState::ThreeWay {
-                        self.tie_fsm.process_tie(&tie)
+                        self.tie_fsm.process_tie(is_originator, &tie)
                     }
                 }
             }

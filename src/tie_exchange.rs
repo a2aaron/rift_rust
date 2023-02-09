@@ -173,12 +173,9 @@ impl TieStateMachine {
     /// f. for all TIEs in CLEARKEYS remove_from_all_queues(TIE)
     pub fn process_tide(
         &mut self,
-        node_id: SystemID,
-        packet_header: &PacketHeader,
+        is_originator: bool,
         tide: &TIDEPacket,
     ) -> Result<(), Box<dyn Error>> {
-        let originator_is_this_node = packet_header.sender == node_id.into();
-
         let mut req_keys = vec![];
         let mut tx_keys = vec![];
         let mut clear_keys = vec![];
@@ -214,7 +211,7 @@ impl TieStateMachine {
             match db_tie {
                 None => {
                     // 5. if DBTIE not found then
-                    if originator_is_this_node {
+                    if is_originator {
                         // I) if originator is this node then bump_own_tie
                         self.bump_own_tie(todo!())
                     } else {
@@ -225,7 +222,7 @@ impl TieStateMachine {
                 Some(db_tie) => {
                     // 6. if DBTIE.HEADER < HEADER then
                     if db_tie.header < tide_header.header {
-                        if originator_is_this_node {
+                        if is_originator {
                             // I) if originator is this node then bump_own_tie else
                             self.bump_own_tie(todo!());
                         } else {
@@ -366,8 +363,90 @@ impl TieStateMachine {
         }
     }
 
-    pub fn process_tie(&mut self, tie: &TIEPacket) {
-        todo!()
+    /// 4.2.3.3.1.4. TIEs Processing on Flood State Adjacency
+    /// On reception of TIEs the following processing is performed:
+    ///     ACKTIE: TIE to acknowledge TXTIE: TIE to transmit
+    ///     DBTIE: TIE in the LSDB if found
+    /// a. DBTIE = find TIE in current LSDB
+    /// b. if DBTIE not found then
+    ///     1. if originator is this node then bump_own_tie with a short remaining lifetime
+    ///     2. else insert TIE into LSDB and ACKTIE = TIE
+    /// else
+    ///     1. if DBTIE.HEADER = TIE.HEADER then
+    ///         i. if DBTIE has content already then ACKTIE = TIE
+    ///         ii. else process like the "DBTIE.HEADER < TIE.HEADER" case
+    ///     2. if DBTIE.HEADER < TIE.HEADER then
+    ///         i. if originator is this node then bump_own_tie
+    ///         ii. else insert TIE into LSDB and ACKTIE = TIE
+    ///     3. if DBTIE.HEADER > TIE.HEADER then
+    ///         i. if DBTIE has content already then TXTIE = DBTIE
+    ///         ii. else ACKTIE = DBTIE
+    /// c. if TXTIE is set then try_to_transmit_tie(TXTIE)
+    /// d. if ACKTIE is set then ack_tie(TIE)
+    pub fn process_tie(&mut self, is_originator: bool, tie: &TIEPacket) {
+        let mut tx_tie = None;
+        let mut ack_tie = None;
+        // a. DBTIE = find TIE in current LSDB
+        let db_tie = self.ls_db.find(&tie.header);
+        match &db_tie {
+            // b. if DBTIE not found then
+            None => {
+                if is_originator {
+                    // 1. if originator is this node then bump_own_tie with a short remaining lifetime
+                    self.bump_own_tie(tie);
+                } else {
+                    // 2. else insert TIE into LSDB and ACKTIE = TIE
+                    self.ls_db.insert(tie);
+                    ack_tie = Some(tie);
+                }
+            }
+            // else
+            Some(db_tie) => {
+                if db_tie.header == tie.header {
+                    // 1. if DBTIE.HEADER = TIE.HEADER then
+                    if tie_has_content(&db_tie) {
+                        // i. if DBTIE has content already then ACKTIE = TIE
+                        ack_tie = Some(tie);
+                    } else {
+                        // ii. else process like the "DBTIE.HEADER < TIE.HEADER" case
+                        if is_originator {
+                            self.bump_own_tie(tie);
+                        } else {
+                            self.ls_db.insert(tie);
+                            ack_tie = Some(tie);
+                        }
+                    }
+                } else if db_tie.header < tie.header {
+                    // 2. if DBTIE.HEADER < TIE.HEADER then
+                    if is_originator {
+                        // i. if originator is this node then bump_own_tie
+                        self.bump_own_tie(tie);
+                    } else {
+                        // ii. else insert TIE into LSDB and ACKTIE = TIE
+                        self.ls_db.insert(tie);
+                        ack_tie = Some(tie);
+                    }
+                } else {
+                    // 3. if DBTIE.HEADER > TIE.HEADER then
+                    if tie_has_content(&db_tie) {
+                        // i. if DBTIE has content already then TXTIE = DBTIE
+                        tx_tie = Some(db_tie);
+                    } else {
+                        // ii. else ACKTIE = DBTIE
+                        ack_tie = Some(db_tie);
+                    }
+                }
+            }
+        }
+        // c. if TXTIE is set then try_to_transmit_tie(TXTIE)
+        if let Some(tie) = tx_tie {
+            self.try_to_transmit_tie(tie);
+        }
+
+        // d. if ACKTIE is set then ack_tie(TIE)
+        if let Some(tie) = ack_tie {
+            self.ack_tie(tie);
+        }
     }
 
     pub fn send_ties(&mut self) {
@@ -481,6 +560,10 @@ impl LinkStateDatabase {
     }
 
     fn replace(&self, db_header: TIEPacket, header: TIEHeader) {
+        todo!()
+    }
+
+    fn insert(&mut self, tie: &TIEPacket) {
         todo!()
     }
 }
