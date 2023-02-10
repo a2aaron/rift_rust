@@ -87,6 +87,11 @@ impl LieStateMachine {
         }
     }
 
+    /// Return the currently set level for the LIE FSM.
+    pub fn level(&self) -> Level {
+        self.level
+    }
+
     /// Process a external events, if there exist any events in the event queue. Note that this
     /// also processes any events pushed by the PUSH procedure, so the `chained_event_queue` will
     /// be empty both before and after this call.

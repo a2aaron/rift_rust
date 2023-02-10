@@ -29,6 +29,7 @@ const MAX_TIEID: TIEID = TIEID {
 /// I don't know if this actually makes sense to have
 pub struct TieStateMachine {
     /// Collection containing all the TIEs to transmit on the adjacency.
+    // TODO: Should these be BTreeMap<TIEID, TieHeader>? It seems like rift-python might do that...
     transmit_ties: BTreeSet<TIEHeader>,
     /// Collection containing all the TIEs that have to be acknowledged on the adjacency.
     acknoledge_ties: BTreeSet<TIEHeader>,
@@ -204,12 +205,9 @@ impl TieStateMachine {
     pub fn process_tide(
         &mut self,
         is_originator: bool,
+        from_northbound: bool,
         tide: &TIDEPacket,
     ) -> Result<(), Box<dyn Error>> {
-        fn is_north_tie_and_from_northbound(tie: &TIEPacket) -> bool {
-            todo!();
-        }
-
         let mut req_keys = vec![];
         let mut tx_keys = vec![];
         let mut clear_keys = vec![];
@@ -262,7 +260,9 @@ impl TieStateMachine {
                         } else {
                             // i. if this is a North TIE header from a northbound neighbor then
                             //    override DBTIE in LSDB with HEADER
-                            if is_north_tie_and_from_northbound(&db_tie) {
+                            if tide_header.header.tieid.direction == common::TieDirectionType::NORTH
+                                && from_northbound
+                            {
                                 self.ls_db.replace(&db_tie, &tide_header.header);
                             } else {
                                 // ii. else put HEADER into REQKEYS
