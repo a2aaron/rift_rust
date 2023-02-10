@@ -553,14 +553,16 @@ impl TieStateMachine {
             self.requested_ties.insert(tie.clone());
         }
     }
-    // remove TIE from TIES_TX and then add to TIES_RTX using TIE retransmission interval.
-    fn move_to_rtx_list(&mut self, tie: &TIEPacket) {
+    /// Seemingly not used in the spec?
+    /// remove TIE from TIES_TX and then add to TIES_RTX using TIE retransmission interval.
+    fn _move_to_rtx_list(&mut self, tie: &TIEPacket) {
         self.transmit_ties.remove(&tie.header);
         self.retransmit_ties.remove(&tie.header); // TODO: retransmission interval
     }
 
-    // remove all TIEs from TIES_REQ.
-    fn clear_requests(&mut self, ties: &[TIEPacket]) {
+    /// Seemingly not used in the spec?
+    /// remove all TIEs from TIES_REQ.
+    fn _clear_requests(&mut self, ties: &[TIEPacket]) {
         for tie in ties {
             self.requested_ties.remove(&tie.header);
         }

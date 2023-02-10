@@ -156,7 +156,10 @@ Suppose node A is a leaf received a LIE from node B that is level 23. Let node A
 
 # TIE Exchange
 - why is there `tie_been_acked` and `remove_from_all_queues` if they do the same thing??
-
+- The following functions are defined but not used:
+    - `is_flood_reduced`
+    - `move_to_rtx_list`
+    - `clear_requests`
 - MAX_TIEID states that it's constants are the following:
 ```
 TIE Key with maximal values:
