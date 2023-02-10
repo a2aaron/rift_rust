@@ -186,6 +186,11 @@ Second, "TIEIDs also carry `origination_time` and `origination_lifetime`" is not
 
 Third, are TieHeaders also totally ordered? It seems like they are, but this should be made explicit.
 
+- It is really unclear what sort of structure the "queues" are supposed to be. Are they:
+    - storing _just_ TIEIDs?
+    - storing _just_ TieHeaders?
+    - storing TIEID -> TieHeader key-value pairs? If so, is it the TIEID that determines uniqueness (and hence there should not be two TieHeaders of the same TIEID even if they have different other values?)
+    - In particular, what does "if TIE" with same key is found on TIES_ACK" mean for `try_to_transmit_tie`?
 # Rift Python
 - two_by_two_by_two_ztp.yaml has `level: superspine`. However, this does not appear to be a real named level value, and attempting to get rift-python to parse the file results in an error.
 - Should ZTP really set the `_derived_level` value directly instead of issuing `LEVEL_CHANGED`? This means that ZTP level changes don't cause the LIE FSM to reset back to `ONE_WAY`, even though `LEVEL_CHANGED` does...

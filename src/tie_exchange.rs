@@ -502,6 +502,7 @@ impl TieStateMachine {
         todo!()
     }
 
+    /// TODO: What does "TIE" with the same key" mean? Should acknowledge_ties be a map and not a set?
     /// A. if not is_flood_filtered(TIE) then
     /// B.1. remove TIE from TIES_RTX if present
     ///   2. if TIE" with same key is found on TIES_ACK then
@@ -511,9 +512,12 @@ impl TieStateMachine {
     fn try_to_transmit_tie(&mut self, tie: &TIEHeader) {
         if !self.is_flood_filtered(tie) {
             self.requested_ties.remove(tie);
-            if let Some(other_tie) = self.acknoledge_ties.get(tie) {
-                // if TIE" is same or newer than TIE do nothing else
-                // remove TIE" from TIES_ACK and add TIE to TIES_TX
+            if let Some(other_tie) = self.acknoledge_ties.take(tie) {
+                if tie.seq_nr <= other_tie.seq_nr {
+                    self.acknoledge_ties.insert(other_tie);
+                } else {
+                    self.transmit_ties.insert(tie.clone());
+                }
                 todo!();
             } else {
                 self.transmit_ties.insert(tie.clone());
