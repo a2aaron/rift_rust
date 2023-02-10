@@ -1,18 +1,15 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     error::Error,
-    time::{Duration, Instant, SystemTime},
+    time::{Duration, SystemTime},
 };
 
-use crate::{
-    models::{
-        common::{self, TIETypeType, TieDirectionType},
-        encoding::{
-            PacketHeader, ProtocolPacket, TIDEPacket, TIEHeader, TIEHeaderWithLifeTime, TIEPacket,
-            TIREPacket, TIEID,
-        },
+use crate::models::{
+    common::{self, TIETypeType, TieDirectionType},
+    encoding::{
+        PacketHeader, ProtocolPacket, TIDEPacket, TIEHeader, TIEHeaderWithLifeTime, TIEPacket,
+        TIREPacket, TIEID,
     },
-    wrapper::SystemID,
 };
 
 const MIN_TIEID: TIEID = TIEID {
@@ -32,27 +29,24 @@ const MAX_TIEID: TIEID = TIEID {
 /// I don't know if this actually makes sense to have
 pub struct TieStateMachine {
     /// Collection containing all the TIEs to transmit on the adjacency.
-    transmit_ties: TieCollection,
+    transmit_ties: BTreeSet<TIEHeader>,
     /// Collection containing all the TIEs that have to be acknowledged on the adjacency.
-    acknoledge_ties: TieCollection,
+    acknoledge_ties: BTreeSet<TIEHeader>,
     /// Collection containing all the TIE headers that have to be requested on the adjacency.
-    requested_ties: TieCollection,
+    requested_ties: BTreeSet<TIEHeader>,
     /// Collection containing all TIEs that need retransmission with the according time to
     /// retransmit
-    retransmit_ties: TieCollection,
-    /// Unsure what this actually is. Seems to be an ordered collection of TIEs?
-    tie_db: TieCollection,
+    retransmit_ties: BTreeSet<TIEHeader>,
     ls_db: LinkStateDatabase,
 }
 
 impl TieStateMachine {
     pub fn new() -> TieStateMachine {
         TieStateMachine {
-            transmit_ties: TieCollection::new(),
-            acknoledge_ties: TieCollection::new(),
-            requested_ties: TieCollection::new(),
-            retransmit_ties: TieCollection::new(),
-            tie_db: TieCollection::new(),
+            transmit_ties: BTreeSet::new(),
+            acknoledge_ties: BTreeSet::new(),
+            requested_ties: BTreeSet::new(),
+            retransmit_ties: BTreeSet::new(),
             ls_db: LinkStateDatabase::new(),
         }
     }
@@ -78,9 +72,9 @@ impl TieStateMachine {
     /// exceed interface MTU.
     /// TIDE PDUs SHOULD be spaced on sending to prevent packet drops
     pub fn generate_tide(&mut self, tirdes_per_pkt: usize) -> Vec<TIDEPacket> {
-        fn positive_lifetime(tie: &TIEPacket) -> bool {
-            let origination_time = &tie.header.origination_time;
-            let lifetime_in_secs = tie.header.origination_lifetime;
+        fn positive_lifetime(header: &TIEHeader) -> bool {
+            let origination_time = &header.origination_time;
+            let lifetime_in_secs = header.origination_lifetime;
             match (origination_time, lifetime_in_secs) {
                 (Some(time), Some(lifetime_in_secs)) => {
                     let seconds_since_epoch = Duration::from_secs(time.a_s_sec as u64);
@@ -125,15 +119,16 @@ impl TieStateMachine {
             // 1. TIDE_START = NEXT_TIDE_ID
             // TODO: This is omitted, because I can't figure out where "TIDE_START" is used.
 
+            // TODO: Interpreting "TIEDB" as "LSDB".
             // 2. HEADERS = At most TIRDEs_PER_PKT headers in TIEDB starting at NEXT_TIDE_ID or
             //    higher that SHOULD be filtered by is_tide_entry_filtered and MUST either have a
             //    lifetime left > 0 or have no content
             let mut headers = self
-                .tie_db
+                .ls_db
                 .ties
                 .range(&next_tide_id..)
                 .filter(|(_, tie)| self.is_tide_entry_filtered(tie))
-                .filter(|(_, tie)| positive_lifetime(tie) || !tie_has_content(tie))
+                .filter(|(_, tie)| positive_lifetime(&tie.header) || !tie_has_content(tie))
                 .take(tirdes_per_pkt)
                 .collect::<Vec<_>>();
             // Sorting done here so that "first element" and "last element" hopefully correspond to
@@ -211,6 +206,10 @@ impl TieStateMachine {
         is_originator: bool,
         tide: &TIDEPacket,
     ) -> Result<(), Box<dyn Error>> {
+        fn is_north_tie_and_from_northbound(tie: &TIEPacket) -> bool {
+            todo!();
+        }
+
         let mut req_keys = vec![];
         let mut tx_keys = vec![];
         let mut clear_keys = vec![];
@@ -248,7 +247,7 @@ impl TieStateMachine {
                     // 5. if DBTIE not found then
                     if is_originator {
                         // I) if originator is this node then bump_own_tie
-                        self.bump_own_tie(todo!())
+                        self.bump_own_tie(&tide_header.header)
                     } else {
                         // II) else put HEADER into REQKEYS
                         req_keys.push(tide_header);
@@ -259,12 +258,12 @@ impl TieStateMachine {
                     if db_tie.header < tide_header.header {
                         if is_originator {
                             // I) if originator is this node then bump_own_tie else
-                            self.bump_own_tie(todo!());
+                            self.bump_own_tie(&tide_header.header);
                         } else {
                             // i. if this is a North TIE header from a northbound neighbor then
                             //    override DBTIE in LSDB with HEADER
-                            if todo!() {
-                                self.ls_db.replace(db_tie, tide_header.header);
+                            if is_north_tie_and_from_northbound(&db_tie) {
+                                self.ls_db.replace(&db_tie, &tide_header.header);
                             } else {
                                 // ii. else put HEADER into REQKEYS
                                 req_keys.push(tide_header);
@@ -297,20 +296,17 @@ impl TieStateMachine {
 
         // d. for all TIEs in TXKEYS try_to_transmit_tie(TIE)
         for tie in tx_keys {
-            todo!();
-            // self.try_to_transmit_tie(tie);
+            self.try_to_transmit_tie(&tie);
         }
 
         // e. for all TIEs in REQKEYS request_tie(TIE)
         for tie in req_keys {
-            todo!();
-            // self.request_tie(tie);
+            self.request_tie(&tie.header);
         }
 
         // f. for all TIEs in CLEARKEYS remove_from_all_queues(TIE)
         for tie in clear_keys {
-            todo!();
-            // self.remove_from_all_queues(tie)
+            self.remove_from_all_queues(&tie)
         }
         Ok(())
     }
@@ -322,7 +318,7 @@ impl TieStateMachine {
     /// TIEs seem to be same.
     pub fn generate_tire(&mut self) -> TIREPacket {
         let mut headers = BTreeSet::new();
-        for (id, packet) in &self.requested_ties.ties {
+        for header in &self.requested_ties {
             let header = TIEHeaderWithLifeTime {
                 header: todo!(),
                 remaining_lifetime: 0,
@@ -330,7 +326,7 @@ impl TieStateMachine {
             headers.insert(header);
         }
 
-        for tie in &self.acknoledge_ties.ties {
+        for tie in &self.acknoledge_ties {
             let header = TIEHeaderWithLifeTime {
                 header: todo!(),
                 remaining_lifetime: todo!(),
@@ -381,20 +377,17 @@ impl TieStateMachine {
 
         // b. for all TIEs in TXKEYS try_to_transmit_tie(TIE)
         for tie in tx_keys {
-            todo!();
-            // self.try_to_transmit_tie(tie);
+            self.try_to_transmit_tie(&tie);
         }
 
         // c. for all TIEs in REQKEYS request_tie(TIE)
         for tie in req_keys {
-            todo!();
-            // self.request_tie(tie);
+            self.request_tie(&tie.header);
         }
 
         // d. for all TIEs in ACKKEYS tie_been_acked(TIE)
         for tie in ack_keys {
-            todo!();
-            // self.tie_been_acked(tie);
+            self.tie_been_acked(&tie);
         }
     }
 
@@ -428,7 +421,7 @@ impl TieStateMachine {
             None => {
                 if is_originator {
                     // 1. if originator is this node then bump_own_tie with a short remaining lifetime
-                    self.bump_own_tie(tie);
+                    self.bump_own_tie(&tie.header);
                 } else {
                     // 2. else insert TIE into LSDB and ACKTIE = TIE
                     self.ls_db.insert(tie);
@@ -445,7 +438,7 @@ impl TieStateMachine {
                     } else {
                         // ii. else process like the "DBTIE.HEADER < TIE.HEADER" case
                         if is_originator {
-                            self.bump_own_tie(tie);
+                            self.bump_own_tie(&tie.header);
                         } else {
                             self.ls_db.insert(tie);
                             ack_tie = Some(tie);
@@ -455,7 +448,7 @@ impl TieStateMachine {
                     // 2. if DBTIE.HEADER < TIE.HEADER then
                     if is_originator {
                         // i. if originator is this node then bump_own_tie
-                        self.bump_own_tie(tie);
+                        self.bump_own_tie(&tie.header);
                     } else {
                         // ii. else insert TIE into LSDB and ACKTIE = TIE
                         self.ls_db.insert(tie);
@@ -475,7 +468,7 @@ impl TieStateMachine {
         }
         // c. if TXTIE is set then try_to_transmit_tie(TXTIE)
         if let Some(tie) = tx_tie {
-            self.try_to_transmit_tie(tie);
+            self.try_to_transmit_tie(&tie.header);
         }
 
         // d. if ACKTIE is set then ack_tie(TIE)
@@ -488,8 +481,9 @@ impl TieStateMachine {
         todo!();
     }
 
+    /// Seemingly not used in the spec?
     /// returns whether a TIE can be flood reduced or not
-    fn is_flood_reduced(&self, tie: &TIEPacket) -> bool {
+    fn _is_flood_reduced(&self, _tie: &TIEPacket) -> bool {
         todo!()
     }
 
@@ -499,12 +493,12 @@ impl TieStateMachine {
     }
 
     /// returns whether a TIE request should be propagated to neighbor or not according to flooding scopes
-    fn is_request_filtered(&self, tie: &TIEPacket) -> bool {
+    fn is_request_filtered(&self, tie: &TIEHeader) -> bool {
         todo!()
     }
 
     /// returns whether a TIE requested be flooded to neighbor or not according to flooding scopes.
-    fn is_flood_filtered(&self, tie: &TIEPacket) -> bool {
+    fn is_flood_filtered(&self, tie: &TIEHeader) -> bool {
         todo!()
     }
 
@@ -514,30 +508,30 @@ impl TieStateMachine {
     ///      a. if TIE" is same or newer than TIE do nothing else
     ///      b. remove TIE" from TIES_ACK and add TIE to TIES_TX
     ///   3. else insert TIE into TIES_TX
-    fn try_to_transmit_tie(&mut self, tie: &TIEPacket) {
+    fn try_to_transmit_tie(&mut self, tie: &TIEHeader) {
         if !self.is_flood_filtered(tie) {
             self.requested_ties.remove(tie);
-            if let Some(other_tie) = self.acknoledge_ties.has_key(tie) {
+            if let Some(other_tie) = self.acknoledge_ties.get(tie) {
                 // if TIE" is same or newer than TIE do nothing else
                 // remove TIE" from TIES_ACK and add TIE to TIES_TX
                 todo!();
             } else {
-                self.transmit_ties.insert(tie);
+                self.transmit_ties.insert(tie.clone());
             }
         }
     }
 
     /// remove TIE from all collections and then insert TIE into TIES_ACK.
     fn ack_tie(&mut self, tie: &TIEPacket) {
-        self.transmit_ties.remove(tie);
-        self.acknoledge_ties.remove(tie);
-        self.retransmit_ties.remove(tie);
-        self.requested_ties.remove(tie);
-        self.acknoledge_ties.insert(tie);
+        self.transmit_ties.remove(&tie.header);
+        self.acknoledge_ties.remove(&tie.header);
+        self.retransmit_ties.remove(&tie.header);
+        self.requested_ties.remove(&tie.header);
+        self.acknoledge_ties.insert(tie.header.clone());
     }
 
     /// remove TIE from all collections.
-    fn tie_been_acked(&mut self, tie: &TIEPacket) {
+    fn tie_been_acked(&mut self, tie: &TIEHeader) {
         self.transmit_ties.remove(tie);
         self.acknoledge_ties.remove(tie);
         self.retransmit_ties.remove(tie);
@@ -545,31 +539,31 @@ impl TieStateMachine {
     }
 
     // same as `tie_been_acked`.
-    fn remove_from_all_queues(&mut self, tie: &TIEPacket) {
+    fn remove_from_all_queues(&mut self, tie: &TIEHeader) {
         self.tie_been_acked(tie);
     }
     // if not is_request_filtered(TIE) then remove_from_all_queues(TIE) and add to TIES_REQ.
-    fn request_tie(&mut self, tie: &TIEPacket) {
+    fn request_tie(&mut self, tie: &TIEHeader) {
         if !self.is_request_filtered(tie) {
             self.remove_from_all_queues(tie);
-            self.requested_ties.insert(tie);
+            self.requested_ties.insert(tie.clone());
         }
     }
     // remove TIE from TIES_TX and then add to TIES_RTX using TIE retransmission interval.
     fn move_to_rtx_list(&mut self, tie: &TIEPacket) {
-        self.transmit_ties.remove(tie);
-        self.retransmit_ties.remove(tie); // TODO: retransmission interval
+        self.transmit_ties.remove(&tie.header);
+        self.retransmit_ties.remove(&tie.header); // TODO: retransmission interval
     }
 
     // remove all TIEs from TIES_REQ.
     fn clear_requests(&mut self, ties: &[TIEPacket]) {
         for tie in ties {
-            self.requested_ties.remove(tie)
+            self.requested_ties.remove(&tie.header);
         }
     }
 
     // for self-originated TIE originate an empty or re-generate with version number higher then
-    fn bump_own_tie(&mut self, tie: &TIEPacket) {
+    fn bump_own_tie(&mut self, tie: &TIEHeader) {
         todo!()
     }
     // the one in TIE
@@ -594,37 +588,11 @@ impl LinkStateDatabase {
         todo!()
     }
 
-    fn replace(&self, db_header: TIEPacket, header: TIEHeader) {
+    fn replace(&self, db_header: &TIEPacket, header: &TIEHeader) {
         todo!()
     }
 
     fn insert(&mut self, tie: &TIEPacket) {
-        todo!()
-    }
-}
-
-struct TieCollection {
-    // TODO: The TIEID Ord implementation is probably wrong. You will need to use a wrapper struct
-    // and implement one manually. Check Section 4.2.3.3 for the specification.
-    ties: BTreeMap<TIEID, TIEPacket>,
-}
-
-impl TieCollection {
-    fn new() -> TieCollection {
-        TieCollection {
-            ties: BTreeMap::new(),
-        }
-    }
-
-    fn insert(&mut self, tie: &TIEPacket) {
-        todo!()
-    }
-
-    fn remove(&mut self, tie: &TIEPacket) {
-        todo!()
-    }
-
-    fn has_key(&self, tie: &TIEPacket) -> Option<TIEPacket> {
         todo!()
     }
 }
