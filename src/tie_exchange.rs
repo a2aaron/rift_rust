@@ -415,19 +415,30 @@ impl TieStateMachine {
     pub fn process_tie(&mut self, is_originator: bool, tie: &TIEPacket) {
         let mut tx_tie = None;
         let mut ack_tie = None;
+
         // a. DBTIE = find TIE in current LSDB
         let db_tie = self.ls_db.find(&tie.header);
+
+        // Convience closure--this implements the following:
+        // 1. if originator is this node then bump_own_tie with a short remaining lifetime
+        // 2. else insert TIE into LSDB and ACKTIE = TIE
+        let mut if_originator_then_bump_else_insert_tie_and_set_acktie = || {
+            if is_originator {
+                // 1. if originator is this node then bump_own_tie with a short remaining lifetime
+                self.bump_own_tie(&tie.header);
+            } else {
+                // 2. else insert TIE into LSDB and ACKTIE = TIE
+                self.ls_db.insert(tie);
+                ack_tie = Some(tie);
+            }
+        };
+
         match &db_tie {
             // b. if DBTIE not found then
             None => {
-                if is_originator {
-                    // 1. if originator is this node then bump_own_tie with a short remaining lifetime
-                    self.bump_own_tie(&tie.header);
-                } else {
-                    // 2. else insert TIE into LSDB and ACKTIE = TIE
-                    self.ls_db.insert(tie);
-                    ack_tie = Some(tie);
-                }
+                // 1. if originator is this node then bump_own_tie with a short remaining lifetime
+                // 2. else insert TIE into LSDB and ACKTIE = TIE
+                if_originator_then_bump_else_insert_tie_and_set_acktie();
             }
             // else
             Some(db_tie) => {
@@ -438,23 +449,13 @@ impl TieStateMachine {
                         ack_tie = Some(tie);
                     } else {
                         // ii. else process like the "DBTIE.HEADER < TIE.HEADER" case
-                        if is_originator {
-                            self.bump_own_tie(&tie.header);
-                        } else {
-                            self.ls_db.insert(tie);
-                            ack_tie = Some(tie);
-                        }
+                        if_originator_then_bump_else_insert_tie_and_set_acktie();
                     }
                 } else if db_tie.header < tie.header {
                     // 2. if DBTIE.HEADER < TIE.HEADER then
-                    if is_originator {
-                        // i. if originator is this node then bump_own_tie
-                        self.bump_own_tie(&tie.header);
-                    } else {
-                        // ii. else insert TIE into LSDB and ACKTIE = TIE
-                        self.ls_db.insert(tie);
-                        ack_tie = Some(tie);
-                    }
+                    // i. if originator is this node then bump_own_tie
+                    // ii. else insert TIE into LSDB and ACKTIE = TIE
+                    if_originator_then_bump_else_insert_tie_and_set_acktie();
                 } else {
                     // 3. if DBTIE.HEADER > TIE.HEADER then
                     if tie_has_content(&db_tie) {
@@ -569,6 +570,8 @@ impl TieStateMachine {
         }
     }
 
+    /// NOTE: this seems to be only ever called in contexts where the TIE happens to be
+    /// self-originiated, so a check here is not needed.
     /// for self-originated TIE originate an empty or re-generate with version number higher then
     /// the one in TIE
     fn bump_own_tie(&mut self, tie: &TIEHeader) {
