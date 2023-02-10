@@ -393,7 +393,8 @@ impl TieStateMachine {
 
     /// 4.2.3.3.1.4. TIEs Processing on Flood State Adjacency
     /// On reception of TIEs the following processing is performed:
-    ///     ACKTIE: TIE to acknowledge TXTIE: TIE to transmit
+    ///     ACKTIE: TIE to acknowledge
+    ///     TXTIE: TIE to transmit
     ///     DBTIE: TIE in the LSDB if found
     /// a. DBTIE = find TIE in current LSDB
     /// b. if DBTIE not found then
@@ -542,11 +543,11 @@ impl TieStateMachine {
         self.requested_ties.remove(tie);
     }
 
-    // same as `tie_been_acked`.
+    /// same as `tie_been_acked`.
     fn remove_from_all_queues(&mut self, tie: &TIEHeader) {
         self.tie_been_acked(tie);
     }
-    // if not is_request_filtered(TIE) then remove_from_all_queues(TIE) and add to TIES_REQ.
+    /// if not is_request_filtered(TIE) then remove_from_all_queues(TIE) and add to TIES_REQ.
     fn request_tie(&mut self, tie: &TIEHeader) {
         if !self.is_request_filtered(tie) {
             self.remove_from_all_queues(tie);
@@ -568,14 +569,14 @@ impl TieStateMachine {
         }
     }
 
-    // for self-originated TIE originate an empty or re-generate with version number higher then
+    /// for self-originated TIE originate an empty or re-generate with version number higher then
+    /// the one in TIE
     fn bump_own_tie(&mut self, tie: &TIEHeader) {
         todo!()
     }
-    // the one in TIE
 }
 
-fn tie_has_content(db_tie: &TIEPacket) -> bool {
+fn tie_has_content(tie: &TIEPacket) -> bool {
     todo!()
 }
 
