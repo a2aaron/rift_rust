@@ -320,16 +320,16 @@ impl TieStateMachine {
         let mut headers = BTreeSet::new();
         for header in &self.requested_ties {
             let header = TIEHeaderWithLifeTime {
-                header: todo!(),
+                header: header.clone(),
                 remaining_lifetime: 0,
             };
             headers.insert(header);
         }
 
-        for tie in &self.acknoledge_ties {
+        for header in &self.acknoledge_ties {
             let header = TIEHeaderWithLifeTime {
-                header: todo!(),
-                remaining_lifetime: todo!(),
+                header: header.clone(),
+                remaining_lifetime: common::DEFAULT_LIFETIME,
             };
             headers.insert(header);
         }
