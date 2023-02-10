@@ -158,7 +158,7 @@ impl TieStateMachine {
                     .iter()
                     .map(|(_, tie)| TIEHeaderWithLifeTime {
                         header: tie.header.clone(),
-                        remaining_lifetime: todo!(),
+                        remaining_lifetime: common::DEFAULT_LIFETIME,
                     })
                     .collect(),
             };
