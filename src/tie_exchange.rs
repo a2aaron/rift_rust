@@ -1,6 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     error::Error,
+    time::{Duration, Instant, SystemTime},
 };
 
 use crate::{
@@ -78,7 +79,41 @@ impl TieStateMachine {
     /// TIDE PDUs SHOULD be spaced on sending to prevent packet drops
     pub fn generate_tide(&mut self, tirdes_per_pkt: usize) -> Vec<TIDEPacket> {
         fn positive_lifetime(tie: &TIEPacket) -> bool {
-            todo!()
+            let origination_time = &tie.header.origination_time;
+            let lifetime_in_secs = tie.header.origination_lifetime;
+            match (origination_time, lifetime_in_secs) {
+                (Some(time), Some(lifetime_in_secs)) => {
+                    let seconds_since_epoch = Duration::from_secs(time.a_s_sec as u64);
+                    let nanoseconds = Duration::from_nanos(time.a_s_nsec.unwrap_or(0) as u64);
+                    let origination_time = match SystemTime::UNIX_EPOCH
+                        .checked_add(seconds_since_epoch + nanoseconds)
+                    {
+                        Some(time) => time,
+                        None => {
+                            tracing::warn!(timestamp =? time, lifetime =? lifetime_in_secs, "Couldn't construct SystemTime");
+                            return false;
+                        }
+                    };
+
+                    let lifetime = Duration::from_secs(lifetime_in_secs as u64);
+                    match origination_time.elapsed() {
+                        Ok(time) => time < lifetime,
+                        Err(err) => {
+                            tracing::warn!(timestamp =? origination_time,
+                                           lifetime =? lifetime_in_secs,
+                                           err =? err,
+                                           "Couldn't get elapsed time");
+                            false
+                        }
+                    }
+                }
+                _ => {
+                    tracing::warn!(timestamp =? origination_time,
+                        lifetime =? lifetime_in_secs,
+                        "Timestamp or lifetime missing");
+                    false
+                }
+            }
         }
 
         let mut tides = vec![];
