@@ -204,6 +204,7 @@ impl Link {
                     content,
                 )),
                 PacketContent::Tide(tide) => {
+                    let tide = &tide.into();
                     if self.lie_fsm.lie_state == LieState::ThreeWay {
                         let from_northbound = match packet.header.level {
                             Some(level) => Some(level + 1) == self.lie_fsm.level().into(),
@@ -211,7 +212,7 @@ impl Link {
                         };
                         if let Err(err) =
                             self.tie_fsm
-                                .process_tide(is_originator, from_northbound, &tide)
+                                .process_tide(is_originator, from_northbound, tide)
                         {
                             tracing::error!(tide =? tide, err =? err, "Error while processing TIDE");
                         }
@@ -219,12 +220,12 @@ impl Link {
                 }
                 PacketContent::Tire(tire) => {
                     if self.lie_fsm.lie_state == LieState::ThreeWay {
-                        self.tie_fsm.process_tire(&tire)
+                        self.tie_fsm.process_tire(&tire.into())
                     }
                 }
                 PacketContent::Tie(tie) => {
                     if self.lie_fsm.lie_state == LieState::ThreeWay {
-                        self.tie_fsm.process_tie(is_originator, &tie)
+                        self.tie_fsm.process_tie(is_originator, &tie.into())
                     }
                 }
             }

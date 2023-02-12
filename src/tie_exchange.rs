@@ -1,53 +1,35 @@
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{btree_map::Entry, BTreeMap, BTreeSet},
     error::Error,
+    ops::Bound,
     time::{Duration, SystemTime},
 };
 
-use crate::models::{
-    common::{self, TIETypeType, TieDirectionType},
-    encoding::{
-        PacketHeader, ProtocolPacket, TIDEPacket, TIEHeader, TIEHeaderWithLifeTime, TIEPacket,
-        TIREPacket, TIEID,
-    },
-};
-
-const MIN_TIEID: TIEID = TIEID {
-    direction: TieDirectionType::SOUTH,
-    originator: 0,
-    tietype: TIETypeType::T_I_E_TYPE_MIN_VALUE,
-    tie_nr: 0,
-};
-
-const MAX_TIEID: TIEID = TIEID {
-    direction: TieDirectionType::NORTH,
-    originator: common::SystemIDType::MAX,
-    tietype: TIETypeType::T_I_E_TYPE_MAX_VALUE,
-    tie_nr: common::TIENrType::MAX,
+use crate::wrapper::{
+    TIDEPacket, TIEHeader, TIEHeaderWithLifetime, TIEPacket, TIREPacket, TieDirection, TIEID,
 };
 
 /// I don't know if this actually makes sense to have
 pub struct TieStateMachine {
     /// Collection containing all the TIEs to transmit on the adjacency.
-    // TODO: Should these be BTreeMap<TIEID, TieHeader>? It seems like rift-python might do that...
-    transmit_ties: BTreeSet<TIEHeader>,
+    transmit_ties: BTreeMap<TIEID, TIEHeader>,
     /// Collection containing all the TIEs that have to be acknowledged on the adjacency.
-    acknoledge_ties: BTreeSet<TIEHeader>,
+    acknowledge_ties: BTreeMap<TIEID, TIEHeader>,
     /// Collection containing all the TIE headers that have to be requested on the adjacency.
-    requested_ties: BTreeSet<TIEHeader>,
+    requested_ties: BTreeMap<TIEID, TIEHeader>,
     /// Collection containing all TIEs that need retransmission with the according time to
     /// retransmit
-    retransmit_ties: BTreeSet<TIEHeader>,
+    retransmit_ties: BTreeMap<TIEID, TIEHeader>,
     ls_db: LinkStateDatabase,
 }
 
 impl TieStateMachine {
     pub fn new() -> TieStateMachine {
         TieStateMachine {
-            transmit_ties: BTreeSet::new(),
-            acknoledge_ties: BTreeSet::new(),
-            requested_ties: BTreeSet::new(),
-            retransmit_ties: BTreeSet::new(),
+            transmit_ties: BTreeMap::new(),
+            acknowledge_ties: BTreeMap::new(),
+            requested_ties: BTreeMap::new(),
+            retransmit_ties: BTreeMap::new(),
             ls_db: LinkStateDatabase::new(),
         }
     }
@@ -73,101 +55,75 @@ impl TieStateMachine {
     /// exceed interface MTU.
     /// TIDE PDUs SHOULD be spaced on sending to prevent packet drops
     pub fn generate_tide(&mut self, tirdes_per_pkt: usize) -> Vec<TIDEPacket> {
-        fn positive_lifetime(header: &TIEHeader) -> bool {
-            let origination_time = &header.origination_time;
+        fn positive_lifetime(header: &TIEHeader) -> Result<bool, Box<dyn Error>> {
+            let origination_time = header.origination_time;
             let lifetime_in_secs = header.origination_lifetime;
             match (origination_time, lifetime_in_secs) {
-                (Some(time), Some(lifetime_in_secs)) => {
-                    let seconds_since_epoch = Duration::from_secs(time.a_s_sec as u64);
-                    let nanoseconds = Duration::from_nanos(time.a_s_nsec.unwrap_or(0) as u64);
-                    let origination_time = match SystemTime::UNIX_EPOCH
-                        .checked_add(seconds_since_epoch + nanoseconds)
-                    {
-                        Some(time) => time,
-                        None => {
-                            tracing::warn!(timestamp =? time, lifetime =? lifetime_in_secs, "Couldn't construct SystemTime");
-                            return false;
-                        }
-                    };
-
+                (Some(origination_time), Some(lifetime_in_secs)) => {
+                    let origination_time: SystemTime = origination_time.try_into()?;
                     let lifetime = Duration::from_secs(lifetime_in_secs as u64);
-                    match origination_time.elapsed() {
-                        Ok(time) => time < lifetime,
-                        Err(err) => {
-                            tracing::warn!(timestamp =? origination_time,
-                                           lifetime =? lifetime_in_secs,
-                                           err =? err,
-                                           "Couldn't get elapsed time");
-                            false
-                        }
-                    }
+                    let elapsed = origination_time.elapsed()?;
+                    Ok(elapsed < lifetime)
                 }
                 _ => {
                     tracing::warn!(timestamp =? origination_time,
                         lifetime =? lifetime_in_secs,
                         "Timestamp or lifetime missing");
-                    false
+                    Ok(false)
                 }
             }
         }
 
-        let mut tides = vec![];
-        // a. NEXT_TIDE_ID = MIN_TIEID
-        let mut next_tide_id = MIN_TIEID;
+        // TODO: Interpreting "TIEDB" as "LSDB".
+        // 2. HEADERS = At most TIRDEs_PER_PKT headers in TIEDB starting at NEXT_TIDE_ID or
+        //    higher that SHOULD be filtered by is_tide_entry_filtered and MUST either have a
+        //    lifetime left > 0 or have no content
+        let mut headers = self
+            .ls_db
+            .ties
+            .iter()
+            .filter(|(_, tie)| self.is_tide_entry_filtered(tie))
+            .filter(|(_, tie)| {
+                let positive_lifetime = match positive_lifetime(&tie.header) {
+                    Ok(x) => x,
+                    Err(err) => {
+                        tracing::warn!(err = err, "couldn't check lifetime");
+                        false
+                    }
+                };
+                positive_lifetime || !tie_has_content(tie)
+            })
+            .collect::<Vec<_>>();
+        // Sorting done here so that "first element" and "last element" hopefully correspond to
+        // to smallest and largest elements of the vector.
+        headers.sort_by_key(|a| a.0);
 
-        // b. while NEXT_TIDE_ID not equal to MAX_TIEID do
-        while next_tide_id != MAX_TIEID {
-            // 1. TIDE_START = NEXT_TIDE_ID
-            // TODO: This is omitted, because I can't figure out where "TIDE_START" is used.
+        let tides = headers
+            .chunks(tirdes_per_pkt)
+            .map(|headers| {
+                // 3. if HEADERS is empty then START = MIN_TIEID else START = first element in HEADERS
+                let start_range = headers.first().map(|x| *x.0);
 
-            // TODO: Interpreting "TIEDB" as "LSDB".
-            // 2. HEADERS = At most TIRDEs_PER_PKT headers in TIEDB starting at NEXT_TIDE_ID or
-            //    higher that SHOULD be filtered by is_tide_entry_filtered and MUST either have a
-            //    lifetime left > 0 or have no content
-            let mut headers = self
-                .ls_db
-                .ties
-                .range(&next_tide_id..)
-                .filter(|(_, tie)| self.is_tide_entry_filtered(tie))
-                .filter(|(_, tie)| positive_lifetime(&tie.header) || !tie_has_content(tie))
-                .take(tirdes_per_pkt)
-                .collect::<Vec<_>>();
-            // Sorting done here so that "first element" and "last element" hopefully correspond to
-            // to smallest and largest elements of the vector.
-            headers.sort();
+                // 4. if HEADERS' size less than TIRDEs_PER_PKT then END = MAX_TIEID else END = last
+                //     element in HEADERS
+                let end_range = if headers.len() < tirdes_per_pkt {
+                    None
+                } else {
+                    headers.last().map(|x| *x.0)
+                };
 
-            // 3. if HEADERS is empty then START = MIN_TIEID else START = first element in HEADERS
-            let start = if headers.is_empty() {
-                MIN_TIEID
-            } else {
-                headers.first().unwrap().0.clone()
-            };
+                // 5. send *sorted* HEADERS as TIDE setting START and END as its range
+                TIDEPacket {
+                    start_range,
+                    end_range,
+                    headers: headers
+                        .iter()
+                        .map(|(_, tie)| TIEHeaderWithLifetime::new(tie.header))
+                        .collect(),
+                }
+            })
+            .collect::<Vec<_>>();
 
-            // 4. if HEADERS' size less than TIRDEs_PER_PKT then END = MAX_TIEID else END = last
-            //     element in HEADERS
-            let end = if headers.len() < tirdes_per_pkt {
-                MAX_TIEID
-            } else {
-                headers.last().unwrap().0.clone()
-            };
-
-            // 5. send *sorted* HEADERS as TIDE setting START and END as its range
-            let tide = TIDEPacket {
-                start_range: start,
-                end_range: end.clone(),
-                headers: headers
-                    .iter()
-                    .map(|(_, tie)| TIEHeaderWithLifeTime {
-                        header: tie.header.clone(),
-                        remaining_lifetime: common::DEFAULT_LIFETIME,
-                    })
-                    .collect(),
-            };
-            tides.push(tide);
-
-            // 6. NEXT_TIDE_ID = END
-            next_tide_id = end;
-        }
         tides
     }
 
@@ -213,7 +169,7 @@ impl TieStateMachine {
         let mut clear_keys = vec![];
 
         // a. LASTPROCESSED = TIDE.start_range
-        let mut last_processed = &tide.start_range;
+        let mut last_processed = tide.start_range;
 
         // b. for every HEADER in TIDE do
         for tide_header in &tide.headers {
@@ -221,24 +177,25 @@ impl TieStateMachine {
             let db_tie = self.ls_db.find(&tide_header.header);
 
             // 2. if HEADER < LASTPROCESSED then report error and reset adjacency and return
-            // TODO: TIEID comparision here is likely doing the wrong thing!
-            if &tide_header.header.tieid < last_processed {
+            if Some(tide_header.header.tie_id) < last_processed {
                 // TODO: reset adjacency
                 return Err("HEADER < LASTPROCESSED".into());
             }
 
             // 3. put all TIEs in LSDB where (TIE.HEADER > LASTPROCESSED and TIE.HEADER < HEADER) into TXKEYS
             // TODO: Interpreting "put all TIEs ... into TXKEYS" as "put all TIE.HEADERs ... into TXKEYS"
-            for (_, tie) in &self.ls_db.ties {
-                if &tie.header.tieid > last_processed
-                    && &tie.header.tieid < &tide_header.header.tieid
-                {
-                    tx_keys.push(tie.header.clone());
-                }
-            }
+            let range = match last_processed {
+                None => (Bound::Unbounded, Bound::Excluded(tide_header.header.tie_id)),
+                Some(x) => (
+                    Bound::Excluded(x),
+                    Bound::Excluded(tide_header.header.tie_id),
+                ),
+            };
+            let range = self.ls_db.ties.range(range).map(|x| x.1.header);
+            tx_keys.extend(range);
 
             // 4. LASTPROCESSED = HEADER
-            last_processed = &tide_header.header.tieid;
+            last_processed = Some(tide_header.header.tie_id);
 
             match db_tie {
                 None => {
@@ -260,7 +217,7 @@ impl TieStateMachine {
                         } else {
                             // i. if this is a North TIE header from a northbound neighbor then
                             //    override DBTIE in LSDB with HEADER
-                            if tide_header.header.tieid.direction == common::TieDirectionType::NORTH
+                            if tide_header.header.tie_id.direction == TieDirection::North
                                 && from_northbound
                             {
                                 self.ls_db.replace(&db_tie, &tide_header.header);
@@ -288,15 +245,19 @@ impl TieStateMachine {
 
         // c. put all TIEs in LSDB where (TIE.HEADER > LASTPROCESSED and TIE.HEADER <= TIDE.end_range
         //    into TXKEYS
-        for (_, tie) in &self.ls_db.ties {
-            if &tie.header.tieid > last_processed && &tie.header.tieid < &tide.end_range {
-                tx_keys.push(tie.header.clone());
-            }
+        let range = match (last_processed, tide.end_range) {
+            (None, None) => (Bound::Unbounded, Bound::Unbounded),
+            (None, Some(end)) => (Bound::Unbounded, Bound::Included(end)),
+            (Some(start), None) => (Bound::Excluded(start), Bound::Unbounded),
+            (Some(start), Some(end)) => (Bound::Excluded(start), Bound::Included(end)),
+        };
+        for (_, tie) in self.ls_db.ties.range(range) {
+            tx_keys.push(tie.header);
         }
 
         // d. for all TIEs in TXKEYS try_to_transmit_tie(TIE)
         for tie in tx_keys {
-            self.try_to_transmit_tie(&tie);
+            self.try_to_transmit_tie(tie);
         }
 
         // e. for all TIEs in REQKEYS request_tie(TIE)
@@ -318,19 +279,16 @@ impl TieStateMachine {
     /// TIEs seem to be same.
     pub fn generate_tire(&mut self) -> TIREPacket {
         let mut headers = BTreeSet::new();
-        for header in &self.requested_ties {
-            let header = TIEHeaderWithLifeTime {
-                header: header.clone(),
+        for (_, &header) in &self.requested_ties {
+            let header = TIEHeaderWithLifetime {
+                header,
                 remaining_lifetime: 0,
             };
             headers.insert(header);
         }
 
-        for header in &self.acknoledge_ties {
-            let header = TIEHeaderWithLifeTime {
-                header: header.clone(),
-                remaining_lifetime: common::DEFAULT_LIFETIME,
-            };
+        for (_, &header) in &self.acknowledge_ties {
+            let header = TIEHeaderWithLifetime::new(header);
             headers.insert(header);
         }
 
@@ -377,7 +335,7 @@ impl TieStateMachine {
 
         // b. for all TIEs in TXKEYS try_to_transmit_tie(TIE)
         for tie in tx_keys {
-            self.try_to_transmit_tie(&tie);
+            self.try_to_transmit_tie(tie);
         }
 
         // c. for all TIEs in REQKEYS request_tie(TIE)
@@ -470,7 +428,7 @@ impl TieStateMachine {
         }
         // c. if TXTIE is set then try_to_transmit_tie(TXTIE)
         if let Some(tie) = tx_tie {
-            self.try_to_transmit_tie(&tie.header);
+            self.try_to_transmit_tie(tie.header);
         }
 
         // d. if ACKTIE is set then ack_tie(TIE)
@@ -511,37 +469,39 @@ impl TieStateMachine {
     ///      a. if TIE" is same or newer than TIE do nothing else
     ///      b. remove TIE" from TIES_ACK and add TIE to TIES_TX
     ///   3. else insert TIE into TIES_TX
-    fn try_to_transmit_tie(&mut self, tie: &TIEHeader) {
-        if !self.is_flood_filtered(tie) {
-            self.requested_ties.remove(tie);
-            if let Some(other_tie) = self.acknoledge_ties.take(tie) {
-                if tie.seq_nr <= other_tie.seq_nr {
-                    self.acknoledge_ties.insert(other_tie);
-                } else {
-                    self.transmit_ties.insert(tie.clone());
+    fn try_to_transmit_tie(&mut self, tie: TIEHeader) {
+        if !self.is_flood_filtered(&tie) {
+            self.requested_ties.remove(&tie.tie_id);
+            if let Entry::Occupied(entry) = self.acknowledge_ties.entry(tie.tie_id) {
+                let other_tie = entry.get();
+                // a. if TIE" is same or newer than TIE do nothing else
+                // b. remove TIE" from TIES_ACK and add TIE to TIES_TX
+                if tie.seq_nr > other_tie.seq_nr {
+                    entry.remove_entry();
+                    self.transmit_ties.insert(tie.tie_id, tie);
                 }
                 todo!();
             } else {
-                self.transmit_ties.insert(tie.clone());
+                self.transmit_ties.insert(tie.tie_id, tie);
             }
         }
     }
 
     /// remove TIE from all collections and then insert TIE into TIES_ACK.
     fn ack_tie(&mut self, tie: &TIEPacket) {
-        self.transmit_ties.remove(&tie.header);
-        self.acknoledge_ties.remove(&tie.header);
-        self.retransmit_ties.remove(&tie.header);
-        self.requested_ties.remove(&tie.header);
-        self.acknoledge_ties.insert(tie.header.clone());
+        self.transmit_ties.remove(&tie.header.tie_id);
+        self.acknowledge_ties.remove(&tie.header.tie_id);
+        self.retransmit_ties.remove(&tie.header.tie_id);
+        self.requested_ties.remove(&tie.header.tie_id);
+        self.acknowledge_ties.insert(tie.header.tie_id, tie.header);
     }
 
     /// remove TIE from all collections.
     fn tie_been_acked(&mut self, tie: &TIEHeader) {
-        self.transmit_ties.remove(tie);
-        self.acknoledge_ties.remove(tie);
-        self.retransmit_ties.remove(tie);
-        self.requested_ties.remove(tie);
+        self.transmit_ties.remove(&tie.tie_id);
+        self.acknowledge_ties.remove(&tie.tie_id);
+        self.retransmit_ties.remove(&tie.tie_id);
+        self.requested_ties.remove(&tie.tie_id);
     }
 
     /// same as `tie_been_acked`.
@@ -552,21 +512,22 @@ impl TieStateMachine {
     fn request_tie(&mut self, tie: &TIEHeader) {
         if !self.is_request_filtered(tie) {
             self.remove_from_all_queues(tie);
-            self.requested_ties.insert(tie.clone());
+            self.requested_ties.insert(tie.tie_id, tie.clone());
         }
     }
     /// Seemingly not used in the spec?
     /// remove TIE from TIES_TX and then add to TIES_RTX using TIE retransmission interval.
     fn _move_to_rtx_list(&mut self, tie: &TIEPacket) {
-        self.transmit_ties.remove(&tie.header);
-        self.retransmit_ties.remove(&tie.header); // TODO: retransmission interval
+        self.transmit_ties.remove(&tie.header.tie_id);
+        self.retransmit_ties.remove(&tie.header.tie_id);
+        todo!(); // TODO: retransmission interval
     }
 
     /// Seemingly not used in the spec?
     /// remove all TIEs from TIES_REQ.
     fn _clear_requests(&mut self, ties: &[TIEPacket]) {
         for tie in ties {
-            self.requested_ties.remove(&tie.header);
+            self.requested_ties.remove(&tie.header.tie_id);
         }
     }
 
@@ -605,29 +566,4 @@ impl LinkStateDatabase {
     fn insert(&mut self, tie: &TIEPacket) {
         todo!()
     }
-}
-
-fn make_tie() -> ProtocolPacket {
-    let tie_header = PacketHeader {
-        major_version: todo!(),
-        minor_version: todo!(),
-        sender: todo!(),
-        level: todo!(),
-    };
-    let tie_body = TIEPacket {
-        header: TIEHeader {
-            tieid: TIEID {
-                direction: todo!(),
-                originator: todo!(),
-                tietype: todo!(),
-                tie_nr: todo!(),
-            },
-            seq_nr: todo!(),
-            origination_time: todo!(),
-            origination_lifetime: todo!(),
-        },
-        element: todo!(),
-    };
-
-    todo!();
 }

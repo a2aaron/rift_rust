@@ -189,6 +189,8 @@ Second, "TIEIDs also carry `origination_time` and `origination_lifetime`" is not
 
 Third, are TieHeaders also totally ordered? It seems like they are, but this should be made explicit.
 
+Fourth, when it is stated that "They contain a `seq_nr` element to distinguish newer versions of same TIE", what is "They"? Is "they" the TIEID or TIEHeader or the TIE packet itself? It seems that only the TIEHeader contains `seq_nr` (with the TIE packet containing the header). TIEIDs do contain `tie_nr` but that doesn't seem like the same thing. Also, what is the purpose of `tie_nr`? This doesn't seem like a sequence number and `rift-python` seems to only use constant values for the field depending on the TIE type.
+
 - It is really unclear what sort of structure the "queues" are supposed to be. Are they:
     - storing _just_ TIEIDs?
     - storing _just_ TieHeaders?
