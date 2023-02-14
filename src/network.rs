@@ -194,9 +194,12 @@ impl Link {
 
         let packets = self.link_socket.recv_packets(keys)?;
         for (packet, address) in packets {
-            // True if this node is the orignator of the packet. This is needed for Process TIDE and
-            // Process TIE.
-            let is_originator = packet.header.sender == self.node_info.system_id.into();
+            let link_info = crate::tie_exchange::LinkInfo {
+                local_level: todo!(),
+                local_system_id: self.node_info.system_id,
+                remote_system_id: todo!(),
+                direction: todo!(),
+            };
             match packet.content {
                 PacketContent::Lie(content) => self.lie_fsm.push_external_event(LieEvent::LieRcvd(
                     address.ip(),
@@ -211,8 +214,7 @@ impl Link {
                             None => false,
                         };
                         if let Err(err) =
-                            self.tie_fsm
-                                .process_tide(is_originator, from_northbound, tide)
+                            self.tie_fsm.process_tide(link_info, from_northbound, tide)
                         {
                             tracing::error!(tide =? tide, err =? err, "Error while processing TIDE");
                         }
@@ -220,12 +222,12 @@ impl Link {
                 }
                 PacketContent::Tire(tire) => {
                     if self.lie_fsm.lie_state == LieState::ThreeWay {
-                        self.tie_fsm.process_tire(&tire.into())
+                        self.tie_fsm.process_tire(link_info, &tire.into())
                     }
                 }
                 PacketContent::Tie(tie) => {
                     if self.lie_fsm.lie_state == LieState::ThreeWay {
-                        self.tie_fsm.process_tie(is_originator, &tie.into())
+                        self.tie_fsm.process_tie(link_info, &tie.into())
                     }
                 }
             }

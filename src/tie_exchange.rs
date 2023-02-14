@@ -5,8 +5,12 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use crate::wrapper::{
-    TIDEPacket, TIEHeader, TIEHeaderWithLifetime, TIEPacket, TIREPacket, TieDirection, TIEID,
+use crate::{
+    models::encoding,
+    wrapper::{
+        SystemID, TIDEPacket, TIEHeader, TIEHeaderWithLifetime, TIEPacket, TIESubtype, TIREPacket,
+        TieDirection, TIEID, TOP_OF_FABRIC_LEVEL,
+    },
 };
 
 /// I don't know if this actually makes sense to have
@@ -160,7 +164,7 @@ impl TieStateMachine {
     /// f. for all TIEs in CLEARKEYS remove_from_all_queues(TIE)
     pub fn process_tide(
         &mut self,
-        is_originator: bool,
+        link_info: LinkInfo,
         from_northbound: bool,
         tide: &TIDEPacket,
     ) -> Result<(), Box<dyn Error>> {
@@ -173,6 +177,8 @@ impl TieStateMachine {
 
         // b. for every HEADER in TIDE do
         for tide_header in &tide.headers {
+            let is_originator = link_info.local_system_id == tide_header.header.tie_id.originator;
+
             // 1. DBTIE = find HEADER in current LSDB
             let db_tie = self.ls_db.find(&tide_header.header);
 
@@ -257,7 +263,7 @@ impl TieStateMachine {
 
         // d. for all TIEs in TXKEYS try_to_transmit_tie(TIE)
         for tie in tx_keys {
-            self.try_to_transmit_tie(tie);
+            self.try_to_transmit_tie(link_info, tie);
         }
 
         // e. for all TIEs in REQKEYS request_tie(TIE)
@@ -310,7 +316,7 @@ impl TieStateMachine {
     /// b. for all TIEs in TXKEYS try_to_transmit_tie(TIE)
     /// c. for all TIEs in REQKEYS request_tie(TIE)
     /// d. for all TIEs in ACKKEYS tie_been_acked(TIE)
-    pub fn process_tire(&mut self, tire: &TIREPacket) {
+    pub fn process_tire(&mut self, link_info: LinkInfo, tire: &TIREPacket) {
         let mut req_keys = vec![];
         let mut tx_keys = vec![];
         let mut ack_keys = vec![];
@@ -335,7 +341,7 @@ impl TieStateMachine {
 
         // b. for all TIEs in TXKEYS try_to_transmit_tie(TIE)
         for tie in tx_keys {
-            self.try_to_transmit_tie(tie);
+            self.try_to_transmit_tie(link_info, tie);
         }
 
         // c. for all TIEs in REQKEYS request_tie(TIE)
@@ -370,7 +376,7 @@ impl TieStateMachine {
     ///         ii. else ACKTIE = DBTIE
     /// c. if TXTIE is set then try_to_transmit_tie(TXTIE)
     /// d. if ACKTIE is set then ack_tie(TIE)
-    pub fn process_tie(&mut self, is_originator: bool, tie: &TIEPacket) {
+    pub fn process_tie(&mut self, link_info: LinkInfo, tie: &TIEPacket) {
         let mut tx_tie = None;
         let mut ack_tie = None;
 
@@ -381,7 +387,7 @@ impl TieStateMachine {
         // 1. if originator is this node then bump_own_tie with a short remaining lifetime
         // 2. else insert TIE into LSDB and ACKTIE = TIE
         let mut if_originator_then_bump_else_insert_tie_and_set_acktie = || {
-            if is_originator {
+            if tie.header.tie_id.originator == link_info.local_system_id {
                 // 1. if originator is this node then bump_own_tie with a short remaining lifetime
                 self.bump_own_tie(&tie.header);
             } else {
@@ -428,7 +434,7 @@ impl TieStateMachine {
         }
         // c. if TXTIE is set then try_to_transmit_tie(TXTIE)
         if let Some(tie) = tx_tie {
-            self.try_to_transmit_tie(tie.header);
+            self.try_to_transmit_tie(link_info, tie.header);
         }
 
         // d. if ACKTIE is set then ack_tie(TIE)
@@ -458,8 +464,62 @@ impl TieStateMachine {
     }
 
     /// returns whether a TIE requested be flooded to neighbor or not according to flooding scopes.
-    fn is_flood_filtered(&self, tie: &TIEHeader) -> bool {
-        todo!()
+    /// if the value is true, then the TIE should be filtered (not flooded). otherwise, it should be flooded
+    /// `link_direction` indicates the direction that the link is in. In other words, this determines
+    /// which direction the TIE would be flooded in (note that this is different from the TIE's direction,
+    /// which indiates the direction the TIE just came from).
+    fn is_flood_filtered(&self, link_info: LinkInfo, tie: &TIEHeader) -> bool {
+        // Implementation adapted from `rift-python`. Original `rift-python` documentation is follows:
+        // We cannot determine the level of the originator just by looking at the TIE header; we have
+        // to look in the TIE-DB to determine it. We can be confident the TIE is in the TIE-DB
+        // because we wouldn't be here, considering sending a TIE to a neighbor, if we did not have
+        // the TIE in the TIE-DB. Also, this question can only be asked about Node TIEs (other TIEs
+        //  don't store the level of the originator in the TIEPacket)
+        let get_originator_level = |tie: &TIEHeader| -> Option<u8> {
+            match self.ls_db.find(tie) {
+                Some(packet) => match packet.element {
+                    encoding::TIEElement::Node(node) => Some(node.level as u8),
+                    _ => None,
+                },
+                None => None,
+            }
+        };
+
+        let tie_id = tie.tie_id;
+        let this_level = link_info.local_level;
+        let link_direction = link_info.direction;
+        let this_system_id = link_info.local_system_id;
+        let neighbor_system_id = link_info.remote_system_id;
+
+        let should_flood = match (tie_id.direction, tie_id.tie_type) {
+            (TieDirection::South, TIESubtype::Node) => match link_direction {
+                // flood if level of originator is equal to this node
+                LinkDirection::South => get_originator_level(tie).unwrap() == this_level,
+                // flood if level of originator is higher than this node
+                LinkDirection::North => get_originator_level(tie).unwrap() > this_level,
+                // flood only if this node is not ToF
+                LinkDirection::EastWest => this_level != TOP_OF_FABRIC_LEVEL,
+            },
+            (TieDirection::South, _) => match link_direction {
+                // flood self-originated only
+                LinkDirection::South => tie_id.originator == this_system_id,
+                // flood only if neighbor is originator is TIE
+                LinkDirection::North => tie_id.originator == neighbor_system_id,
+                // flood only if self-originated and this node is not ToF
+                LinkDirection::EastWest => {
+                    tie_id.originator == this_system_id && this_level != TOP_OF_FABRIC_LEVEL
+                }
+            },
+            (TieDirection::North, _) => match link_direction {
+                // never flood
+                LinkDirection::South => false,
+                // flood always
+                LinkDirection::North => true,
+                // flood only if this node is ToF
+                LinkDirection::EastWest => this_level == TOP_OF_FABRIC_LEVEL,
+            },
+        };
+        !should_flood
     }
 
     /// A. if not is_flood_filtered(TIE) then
@@ -468,8 +528,8 @@ impl TieStateMachine {
     ///      a. if TIE" is same or newer than TIE do nothing else
     ///      b. remove TIE" from TIES_ACK and add TIE to TIES_TX
     ///   3. else insert TIE into TIES_TX
-    fn try_to_transmit_tie(&mut self, tie: TIEHeader) {
-        if !self.is_flood_filtered(&tie) {
+    fn try_to_transmit_tie(&mut self, link_info: LinkInfo, tie: TIEHeader) {
+        if !self.is_flood_filtered(link_info, &tie) {
             self.requested_ties.remove(&tie.tie_id);
             if let Entry::Occupied(entry) = self.acknowledge_ties.entry(tie.tie_id) {
                 let other_tie = entry.get();
@@ -537,6 +597,21 @@ impl TieStateMachine {
     fn bump_own_tie(&mut self, tie: &TIEHeader) {
         todo!()
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct LinkInfo {
+    pub local_level: u8,
+    pub local_system_id: SystemID,
+    pub remote_system_id: SystemID,
+    pub direction: LinkDirection,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinkDirection {
+    South,
+    North,
+    EastWest,
 }
 
 fn tie_has_content(tie: &TIEPacket) -> bool {

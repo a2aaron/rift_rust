@@ -11,6 +11,8 @@ use serde::{Deserialize, Serialize};
 pub type LifetimeInSecs = u32;
 pub type SequenceNumber = u32;
 
+pub const TOP_OF_FABRIC_LEVEL: u8 = common::TOP_OF_FABRIC_LEVEL as u8;
+
 /// TIE packet
 #[derive(Clone, Debug)]
 pub struct TIEPacket {
@@ -417,6 +419,12 @@ impl From<TieNumber> for common::TIENrType {
 /// adjacencies or describing its topology. RIFT System IDs can be auto-derived or configured.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct SystemID(u64);
+
+impl SystemID {
+    pub fn get(&self) -> common::SystemIDType {
+        common::SystemIDType::from(*self)
+    }
+}
 
 impl TryFrom<common::SystemIDType> for SystemID {
     type Error = String;
