@@ -205,7 +205,7 @@ impl TieStateMachine {
                         self.bump_own_tie(&tide_header.header)
                     } else {
                         // II) else put HEADER into REQKEYS
-                        req_keys.push(tide_header);
+                        req_keys.push(tide_header.header);
                     }
                 }
                 Some(db_tie) => {
@@ -223,7 +223,7 @@ impl TieStateMachine {
                                 self.ls_db.replace(&db_tie, &tide_header.header);
                             } else {
                                 // ii. else put HEADER into REQKEYS
-                                req_keys.push(tide_header);
+                                req_keys.push(tide_header.header);
                             }
                         }
                     } else if db_tie.header > tide_header.header {
@@ -236,7 +236,7 @@ impl TieStateMachine {
                             clear_keys.push(db_tie.header);
                         } else {
                             // II) else put HEADER into REQKEYS
-                            req_keys.push(tide_header);
+                            req_keys.push(tide_header.header);
                         }
                     }
                 }
@@ -262,12 +262,12 @@ impl TieStateMachine {
 
         // e. for all TIEs in REQKEYS request_tie(TIE)
         for tie in req_keys {
-            self.request_tie(&tie.header);
+            self.request_tie(tie);
         }
 
         // f. for all TIEs in CLEARKEYS remove_from_all_queues(TIE)
         for tie in clear_keys {
-            self.remove_from_all_queues(&tie)
+            self.remove_from_all_queues(tie)
         }
         Ok(())
     }
@@ -322,7 +322,7 @@ impl TieStateMachine {
             if let Some(db_tie) = db_tie {
                 if db_tie.header < tire_header.header {
                     // 3. if DBTIE.HEADER < HEADER then put HEADER into REQKEYS
-                    req_keys.push(tire_header);
+                    req_keys.push(tire_header.header);
                 } else if db_tie.header > tire_header.header {
                     // 4. if DBTIE.HEADER > HEADER then put DBTIE.HEADER into TXKEYS
                     tx_keys.push(db_tie.header);
@@ -340,12 +340,12 @@ impl TieStateMachine {
 
         // c. for all TIEs in REQKEYS request_tie(TIE)
         for tie in req_keys {
-            self.request_tie(&tie.header);
+            self.request_tie(tie);
         }
 
         // d. for all TIEs in ACKKEYS tie_been_acked(TIE)
         for tie in ack_keys {
-            self.tie_been_acked(&tie);
+            self.tie_been_acked(tie);
         }
     }
 
@@ -433,7 +433,7 @@ impl TieStateMachine {
 
         // d. if ACKTIE is set then ack_tie(TIE)
         if let Some(tie) = ack_tie {
-            self.ack_tie(tie);
+            self.ack_tie(tie.header);
         }
     }
 
@@ -488,16 +488,16 @@ impl TieStateMachine {
     }
 
     /// remove TIE from all collections and then insert TIE into TIES_ACK.
-    fn ack_tie(&mut self, tie: &TIEPacket) {
-        self.transmit_ties.remove(&tie.header.tie_id);
-        self.acknowledge_ties.remove(&tie.header.tie_id);
-        self.retransmit_ties.remove(&tie.header.tie_id);
-        self.requested_ties.remove(&tie.header.tie_id);
-        self.acknowledge_ties.insert(tie.header.tie_id, tie.header);
+    fn ack_tie(&mut self, tie: TIEHeader) {
+        self.transmit_ties.remove(&tie.tie_id);
+        self.acknowledge_ties.remove(&tie.tie_id);
+        self.retransmit_ties.remove(&tie.tie_id);
+        self.requested_ties.remove(&tie.tie_id);
+        self.acknowledge_ties.insert(tie.tie_id, tie);
     }
 
     /// remove TIE from all collections.
-    fn tie_been_acked(&mut self, tie: &TIEHeader) {
+    fn tie_been_acked(&mut self, tie: TIEHeader) {
         self.transmit_ties.remove(&tie.tie_id);
         self.acknowledge_ties.remove(&tie.tie_id);
         self.retransmit_ties.remove(&tie.tie_id);
@@ -505,21 +505,21 @@ impl TieStateMachine {
     }
 
     /// same as `tie_been_acked`.
-    fn remove_from_all_queues(&mut self, tie: &TIEHeader) {
+    fn remove_from_all_queues(&mut self, tie: TIEHeader) {
         self.tie_been_acked(tie);
     }
     /// if not is_request_filtered(TIE) then remove_from_all_queues(TIE) and add to TIES_REQ.
-    fn request_tie(&mut self, tie: &TIEHeader) {
-        if !self.is_request_filtered(tie) {
+    fn request_tie(&mut self, tie: TIEHeader) {
+        if !self.is_request_filtered(&tie) {
             self.remove_from_all_queues(tie);
             self.requested_ties.insert(tie.tie_id, tie.clone());
         }
     }
     /// Seemingly not used in the spec?
     /// remove TIE from TIES_TX and then add to TIES_RTX using TIE retransmission interval.
-    fn _move_to_rtx_list(&mut self, tie: &TIEPacket) {
-        self.transmit_ties.remove(&tie.header.tie_id);
-        self.retransmit_ties.remove(&tie.header.tie_id);
+    fn _move_to_rtx_list(&mut self, tie: TIEHeader) {
+        self.transmit_ties.remove(&tie.tie_id);
+        self.retransmit_ties.remove(&tie.tie_id);
         todo!(); // TODO: retransmission interval
     }
 
