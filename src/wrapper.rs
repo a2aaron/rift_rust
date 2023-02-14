@@ -435,10 +435,6 @@ impl TryFrom<common::SystemIDType> for SystemID {
                 "Illegal system ID (equal to {}, the illegal system ID)",
                 common::ILLEGAL_SYSTEM_I_D
             )),
-            x if x < 0 => Err(format!(
-                "Illegal system ID (expected positive value, got {})",
-                value
-            )),
             _ => Ok(SystemID(value as u64)),
         }
     }

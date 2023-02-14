@@ -6,6 +6,7 @@ use std::{
 };
 
 use crate::{
+    lie_exchange::Neighbor,
     models::encoding,
     wrapper::{
         SystemID, TIDEPacket, TIEHeader, TIEHeaderWithLifetime, TIEPacket, TIESubtype, TIREPacket,
@@ -164,7 +165,7 @@ impl TieStateMachine {
     /// f. for all TIEs in CLEARKEYS remove_from_all_queues(TIE)
     pub fn process_tide(
         &mut self,
-        link_info: LinkInfo,
+        link_info: &LinkInfo,
         from_northbound: bool,
         tide: &TIDEPacket,
     ) -> Result<(), Box<dyn Error>> {
@@ -316,7 +317,7 @@ impl TieStateMachine {
     /// b. for all TIEs in TXKEYS try_to_transmit_tie(TIE)
     /// c. for all TIEs in REQKEYS request_tie(TIE)
     /// d. for all TIEs in ACKKEYS tie_been_acked(TIE)
-    pub fn process_tire(&mut self, link_info: LinkInfo, tire: &TIREPacket) {
+    pub fn process_tire(&mut self, link_info: &LinkInfo, tire: &TIREPacket) {
         let mut req_keys = vec![];
         let mut tx_keys = vec![];
         let mut ack_keys = vec![];
@@ -376,7 +377,7 @@ impl TieStateMachine {
     ///         ii. else ACKTIE = DBTIE
     /// c. if TXTIE is set then try_to_transmit_tie(TXTIE)
     /// d. if ACKTIE is set then ack_tie(TIE)
-    pub fn process_tie(&mut self, link_info: LinkInfo, tie: &TIEPacket) {
+    pub fn process_tie(&mut self, link_info: &LinkInfo, tie: &TIEPacket) {
         let mut tx_tie = None;
         let mut ack_tie = None;
 
@@ -468,7 +469,7 @@ impl TieStateMachine {
     /// `link_direction` indicates the direction that the link is in. In other words, this determines
     /// which direction the TIE would be flooded in (note that this is different from the TIE's direction,
     /// which indiates the direction the TIE just came from).
-    fn is_flood_filtered(&self, link_info: LinkInfo, tie: &TIEHeader) -> bool {
+    fn is_flood_filtered(&self, link_info: &LinkInfo, tie: &TIEHeader) -> bool {
         // Implementation adapted from `rift-python`. Original `rift-python` documentation is follows:
         // We cannot determine the level of the originator just by looking at the TIE header; we have
         // to look in the TIE-DB to determine it. We can be confident the TIE is in the TIE-DB
@@ -487,9 +488,9 @@ impl TieStateMachine {
 
         let tie_id = tie.tie_id;
         let this_level = link_info.local_level;
-        let link_direction = link_info.direction;
+        let link_direction = link_info.direction();
         let this_system_id = link_info.local_system_id;
-        let neighbor_system_id = link_info.remote_system_id;
+        let neighbor_system_id = link_info.neighbor.system_id;
 
         let should_flood = match (tie_id.direction, tie_id.tie_type) {
             (TieDirection::South, TIESubtype::Node) => match link_direction {
@@ -528,7 +529,7 @@ impl TieStateMachine {
     ///      a. if TIE" is same or newer than TIE do nothing else
     ///      b. remove TIE" from TIES_ACK and add TIE to TIES_TX
     ///   3. else insert TIE into TIES_TX
-    fn try_to_transmit_tie(&mut self, link_info: LinkInfo, tie: TIEHeader) {
+    fn try_to_transmit_tie(&mut self, link_info: &LinkInfo, tie: TIEHeader) {
         if !self.is_flood_filtered(link_info, &tie) {
             self.requested_ties.remove(&tie.tie_id);
             if let Entry::Occupied(entry) = self.acknowledge_ties.entry(tie.tie_id) {
@@ -599,12 +600,23 @@ impl TieStateMachine {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct LinkInfo {
     pub local_level: u8,
     pub local_system_id: SystemID,
-    pub remote_system_id: SystemID,
-    pub direction: LinkDirection,
+    pub neighbor: Neighbor,
+}
+
+impl LinkInfo {
+    fn direction(&self) -> LinkDirection {
+        if self.local_level < self.neighbor.level {
+            LinkDirection::North
+        } else if self.local_level > self.neighbor.level {
+            LinkDirection::South
+        } else {
+            LinkDirection::EastWest
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

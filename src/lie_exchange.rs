@@ -10,9 +10,8 @@ use serde::Serialize;
 use crate::{
     models::{
         common::{
-            self, LinkIDType, MTUSizeType, SystemIDType, UDPPortType, DEFAULT_BANDWIDTH,
-            DEFAULT_LIE_HOLDTIME, DEFAULT_ZTP_HOLDTIME, ILLEGAL_SYSTEM_I_D,
-            MULTIPLE_NEIGHBORS_LIE_HOLDTIME_MULTIPLER,
+            self, LinkIDType, MTUSizeType, UDPPortType, DEFAULT_BANDWIDTH, DEFAULT_LIE_HOLDTIME,
+            DEFAULT_ZTP_HOLDTIME, ILLEGAL_SYSTEM_I_D, MULTIPLE_NEIGHBORS_LIE_HOLDTIME_MULTIPLER,
         },
         encoding::{
             self, LIEPacket, PacketHeader, ProtocolPacket, PROTOCOL_MAJOR_VERSION,
@@ -58,7 +57,7 @@ pub struct LieStateMachine {
     /// The neighbor value, which is set by PROCESS_LIE and checked by SEND_LIE. If this value is
     /// Some, then a neighbor has been observed and will be sent out during SEND_LIE to reflect back
     /// to the node on the other end of the Link.
-    neighbor: Option<Neighbor>,
+    pub neighbor: Option<Neighbor>,
     /// A tuple containing the time at which the most recent valid LIE was received along with the
     /// holdtime that LIE packet had. This value is updated each time a valid LIE is received on the
     /// link (see [LieStateMachine::process_lie] for more detail). This controls how long the LIE
@@ -543,6 +542,10 @@ impl LieStateMachine {
             return;
         }
 
+        // This unwrap is safe because of rule 1 (if the LIE's system ID was invalid, then it would
+        // not pass the check against IllegalSystemID)
+        let lie_sender = SystemID::try_from(lie_header.sender).unwrap();
+
         if lie_packet.link_mtu_size != Some(socket_mtu as MTUSizeType) {
             // 2. if LIE has non matching MTUs
             //    then CLEANUP, PUSH UpdateZTPOffer, PUSH MTUMismatch
@@ -645,9 +648,11 @@ impl LieStateMachine {
         self.push(LieEvent::UpdateZTPOffer);
         let new_neighbor = Neighbor {
             name: lie_packet.name.clone(), // TODO: avoid an allocation here?
-            system_id: lie_header.sender,
+            system_id: lie_sender,
             local_link_id: lie_packet.local_id,
-            level: lie_level,
+            // This unwrap is safe because of rule 5 (if the remote level is undefined we would not have accepted the LIE
+            // and would already have returned)
+            level: lie_level.unwrap(),
             address,
             flood_port: lie_packet.flood_port,
         };
@@ -754,7 +759,7 @@ impl LieStateMachine {
     fn send_lie_procedure(&self, socket: &mut LinkSocket, node_info: &NodeInfo) -> io::Result<()> {
         let neighbor = match &self.neighbor {
             Some(neighbor) => Some(encoding::Neighbor {
-                originator: neighbor.system_id,
+                originator: neighbor.system_id.into(),
                 remote_id: neighbor.local_link_id,
             }),
             None => None,
@@ -894,11 +899,11 @@ impl LieStateMachine {
     }
 }
 
-#[derive(Debug, Serialize)]
-struct Neighbor {
-    level: Option<Level>,
+#[derive(Debug, Clone, Serialize)]
+pub struct Neighbor {
+    pub level: Level,
     address: IpAddr,
-    system_id: SystemIDType,
+    pub system_id: SystemID,
     flood_port: UDPPortType,
     name: Option<String>,
     local_link_id: LinkIDType,

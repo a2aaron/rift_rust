@@ -16,7 +16,7 @@ use crate::{
     },
     packet::{self, Nonce, OuterSecurityEnvelopeHeader, PacketNumber, SecretKeyStore},
     socket::{RecvPacketError, RecvPacketResult, RiftSocket},
-    tie_exchange::TieStateMachine,
+    tie_exchange::{LinkInfo, TieStateMachine},
     topology::{NodeDescription, TopologyDescription},
     wrapper::SystemID,
 };
@@ -185,6 +185,19 @@ impl Link {
         keys: &SecretKeyStore,
         ztp_fsm: &mut ZtpStateMachine,
     ) -> Result<(), Box<dyn Error>> {
+        // Returns Some if the Link is currently in ThreeWay along with some information about the Link.
+        fn is_threeway(link: &Link) -> Option<LinkInfo> {
+            if link.lie_fsm.lie_state == LieState::ThreeWay {
+                Some(crate::tie_exchange::LinkInfo {
+                    local_system_id: link.node_info.system_id,
+                    local_level: link.lie_fsm.level().unwrap(),
+                    neighbor: link.lie_fsm.neighbor.clone().unwrap(),
+                })
+            } else {
+                None
+            }
+        }
+
         let _span = tracing::debug_span!(
             "link_step",
             node_name = self.node_info.node_name,
@@ -194,12 +207,6 @@ impl Link {
 
         let packets = self.link_socket.recv_packets(keys)?;
         for (packet, address) in packets {
-            let link_info = crate::tie_exchange::LinkInfo {
-                local_level: todo!(),
-                local_system_id: self.node_info.system_id,
-                remote_system_id: todo!(),
-                direction: todo!(),
-            };
             match packet.content {
                 PacketContent::Lie(content) => self.lie_fsm.push_external_event(LieEvent::LieRcvd(
                     address.ip(),
@@ -208,28 +215,29 @@ impl Link {
                 )),
                 PacketContent::Tide(tide) => {
                     let tide = &tide.into();
-                    if self.lie_fsm.lie_state == LieState::ThreeWay {
+                    if let Some(link_info) = is_threeway(self) {
                         let from_northbound = match packet.header.level {
                             Some(level) => {
                                 Some((level + 1) as lie_exchange::Level) == self.lie_fsm.level()
                             }
                             None => false,
                         };
+
                         if let Err(err) =
-                            self.tie_fsm.process_tide(link_info, from_northbound, tide)
+                            self.tie_fsm.process_tide(&link_info, from_northbound, tide)
                         {
                             tracing::error!(tide =? tide, err =? err, "Error while processing TIDE");
                         }
                     }
                 }
                 PacketContent::Tire(tire) => {
-                    if self.lie_fsm.lie_state == LieState::ThreeWay {
-                        self.tie_fsm.process_tire(link_info, &tire.into())
+                    if let Some(link_info) = is_threeway(self) {
+                        self.tie_fsm.process_tire(&link_info, &tire.into())
                     }
                 }
                 PacketContent::Tie(tie) => {
-                    if self.lie_fsm.lie_state == LieState::ThreeWay {
-                        self.tie_fsm.process_tie(link_info, &tie.into())
+                    if let Some(link_info) = is_threeway(self) {
+                        self.tie_fsm.process_tie(&link_info, &tie.into())
                     }
                 }
             }
