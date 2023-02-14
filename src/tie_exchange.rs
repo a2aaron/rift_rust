@@ -12,24 +12,24 @@ use crate::wrapper::{
 /// I don't know if this actually makes sense to have
 pub struct TieStateMachine {
     /// Collection containing all the TIEs to transmit on the adjacency.
-    transmit_ties: BTreeMap<TIEID, TIEHeader>,
+    transmit_ties: TIECollection,
     /// Collection containing all the TIEs that have to be acknowledged on the adjacency.
-    acknowledge_ties: BTreeMap<TIEID, TIEHeader>,
+    acknowledge_ties: TIECollection,
     /// Collection containing all the TIE headers that have to be requested on the adjacency.
-    requested_ties: BTreeMap<TIEID, TIEHeader>,
+    requested_ties: TIECollection,
     /// Collection containing all TIEs that need retransmission with the according time to
     /// retransmit
-    retransmit_ties: BTreeMap<TIEID, TIEHeader>,
+    retransmit_ties: TIECollection,
     ls_db: LinkStateDatabase,
 }
 
 impl TieStateMachine {
     pub fn new() -> TieStateMachine {
         TieStateMachine {
-            transmit_ties: BTreeMap::new(),
-            acknowledge_ties: BTreeMap::new(),
-            requested_ties: BTreeMap::new(),
-            retransmit_ties: BTreeMap::new(),
+            transmit_ties: TIECollection::new(),
+            acknowledge_ties: TIECollection::new(),
+            requested_ties: TIECollection::new(),
+            retransmit_ties: TIECollection::new(),
             ls_db: LinkStateDatabase::new(),
         }
     }
@@ -279,7 +279,7 @@ impl TieStateMachine {
     /// TIEs seem to be same.
     pub fn generate_tire(&mut self) -> TIREPacket {
         let mut headers = BTreeSet::new();
-        for (_, &header) in &self.requested_ties {
+        for &header in self.requested_ties.iter() {
             let header = TIEHeaderWithLifetime {
                 header,
                 remaining_lifetime: 0,
@@ -287,7 +287,7 @@ impl TieStateMachine {
             headers.insert(header);
         }
 
-        for (_, &header) in &self.acknowledge_ties {
+        for &header in self.acknowledge_ties.iter() {
             let header = TIEHeaderWithLifetime::new(header);
             headers.insert(header);
         }
@@ -462,7 +462,6 @@ impl TieStateMachine {
         todo!()
     }
 
-    /// TODO: What does "TIE" with the same key" mean? Should acknowledge_ties be a map and not a set?
     /// A. if not is_flood_filtered(TIE) then
     /// B.1. remove TIE from TIES_RTX if present
     ///   2. if TIE" with same key is found on TIES_ACK then
@@ -478,11 +477,11 @@ impl TieStateMachine {
                 // b. remove TIE" from TIES_ACK and add TIE to TIES_TX
                 if tie.seq_nr > other_tie.seq_nr {
                     entry.remove_entry();
-                    self.transmit_ties.insert(tie.tie_id, tie);
+                    self.transmit_ties.insert(tie);
                 }
                 todo!();
             } else {
-                self.transmit_ties.insert(tie.tie_id, tie);
+                self.transmit_ties.insert(tie);
             }
         }
     }
@@ -493,7 +492,7 @@ impl TieStateMachine {
         self.acknowledge_ties.remove(&tie.tie_id);
         self.retransmit_ties.remove(&tie.tie_id);
         self.requested_ties.remove(&tie.tie_id);
-        self.acknowledge_ties.insert(tie.tie_id, tie);
+        self.acknowledge_ties.insert(tie);
     }
 
     /// remove TIE from all collections.
@@ -512,7 +511,7 @@ impl TieStateMachine {
     fn request_tie(&mut self, tie: TIEHeader) {
         if !self.is_request_filtered(&tie) {
             self.remove_from_all_queues(tie);
-            self.requested_ties.insert(tie.tie_id, tie.clone());
+            self.requested_ties.insert(tie);
         }
     }
     /// Seemingly not used in the spec?
@@ -544,6 +543,33 @@ fn tie_has_content(tie: &TIEPacket) -> bool {
     todo!()
 }
 
+struct TIECollection {
+    ties: BTreeMap<TIEID, TIEHeader>,
+}
+
+impl TIECollection {
+    fn new() -> TIECollection {
+        TIECollection {
+            ties: BTreeMap::new(),
+        }
+    }
+
+    fn insert(&mut self, tie: TIEHeader) -> Option<TIEHeader> {
+        self.ties.insert(tie.tie_id, tie)
+    }
+
+    fn remove(&mut self, tie_id: &TIEID) -> Option<TIEHeader> {
+        self.ties.remove(tie_id)
+    }
+
+    fn entry(&mut self, tie_id: TIEID) -> Entry<TIEID, TIEHeader> {
+        self.ties.entry(tie_id)
+    }
+
+    fn iter(&self) -> impl Iterator<Item = &TIEHeader> {
+        self.ties.values()
+    }
+}
 struct LinkStateDatabase {
     ties: BTreeMap<TIEID, TIEPacket>,
 }
