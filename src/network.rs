@@ -76,7 +76,7 @@ impl Node {
     /// Create a node from a NodeDescription. This method will fail if the addresses specified in the
     /// NodeDescription cannot be bound to.
     fn from_desc(node_desc: &NodeDescription) -> io::Result<Node> {
-        let configured_level = node_desc.level.into();
+        let configured_level = Option::from(node_desc.level);
         let node_info = NodeInfo {
             node_name: Some(node_desc.name.clone()),
             configured_level,
@@ -210,7 +210,9 @@ impl Link {
                     let tide = &tide.into();
                     if self.lie_fsm.lie_state == LieState::ThreeWay {
                         let from_northbound = match packet.header.level {
-                            Some(level) => Some(level + 1) == self.lie_fsm.level().into(),
+                            Some(level) => {
+                                Some((level + 1) as lie_exchange::Level) == self.lie_fsm.level()
+                            }
                             None => false,
                         };
                         if let Err(err) =
@@ -427,7 +429,7 @@ pub struct NodeInfo {
     /// The name of this node.
     pub node_name: Option<String>,
     /// The configured level. See [topology::Level] for the specific configuration options.
-    pub configured_level: lie_exchange::Level,
+    pub configured_level: Option<lie_exchange::Level>,
     /// The system ID of this node. Note that this is unique across all of the nodes.
     pub system_id: SystemID,
 }

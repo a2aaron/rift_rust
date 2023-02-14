@@ -307,15 +307,15 @@ pub enum Level {
     NamedLevel(NamedLevel),
 }
 
-impl From<Level> for lie_exchange::Level {
+impl From<Level> for Option<lie_exchange::Level> {
     fn from(level: Level) -> Self {
         match level {
-            Level::Number(number) => lie_exchange::Level::Value(number as u8),
+            Level::Number(number) => Some(number as lie_exchange::Level),
             Level::NamedLevel(level) => match level {
-                NamedLevel::Undefined => lie_exchange::Level::Undefined,
-                NamedLevel::Leaf => lie_exchange::Level::Value(LEAF_LEVEL as u8),
-                NamedLevel::LeafToLeaf => lie_exchange::Level::Value(LEAF_LEVEL as u8),
-                NamedLevel::TopOfFabric => lie_exchange::Level::Value(TOP_OF_FABRIC_LEVEL as u8),
+                NamedLevel::Undefined => None,
+                NamedLevel::Leaf => Some(LEAF_LEVEL as lie_exchange::Level),
+                NamedLevel::LeafToLeaf => Some(LEAF_LEVEL as lie_exchange::Level),
+                NamedLevel::TopOfFabric => Some(TOP_OF_FABRIC_LEVEL as lie_exchange::Level),
             },
         }
     }

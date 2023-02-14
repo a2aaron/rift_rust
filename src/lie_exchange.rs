@@ -23,6 +23,10 @@ use crate::{
     wrapper::SystemID,
 };
 
+/// A numerical level. See also: [topology::Level]
+// TODO: are levels only in 0-24 range? if so, maybe enforce this?
+pub type Level = u8;
+
 pub const LEAF_LEVEL: u8 = common::LEAF_LEVEL as u8;
 
 /// The state machine for LIE exchange. This struct accepts external events, and expects the consumer
@@ -38,7 +42,9 @@ pub struct LieStateMachine {
     #[serde(skip)]
     chained_event_queue: VecDeque<LieEvent>,
     /// This node's level, which can be changed by the ZTP FSM or set to a configured value.
-    level: Level,
+    /// If None, then the level is undefined (which means it was not set to a configured value and
+    /// ZTP has not yet found a level)
+    level: Option<Level>,
     /// from spec:  Set of nodes offering HAL VOLs
     /// This, along with `highest_available_level` and `highest_adjacency_threeway` are set by
     /// LieEvent::HAL/HAT/HALSChanged and are sent by the ZTP FSM usually. For some reason, only the
@@ -46,9 +52,9 @@ pub struct LieStateMachine {
     /// is not active, then the HAT and HAL will always be Level::Undefined (and hence have no effect).
     highest_available_level_systems: HALS,
     // from spec: Highest defined level value seen from all VOLs received.
-    highest_available_level: Level,
+    highest_available_level: Option<Level>,
     /// from spec: Highest neighbor level of all the formed ThreeWay adjacencies for the node.
-    highest_adjacency_threeway: Level,
+    highest_adjacency_threeway: Option<Level>,
     /// The neighbor value, which is set by PROCESS_LIE and checked by SEND_LIE. If this value is
     /// Some, then a neighbor has been observed and will be sent out during SEND_LIE to reflect back
     /// to the node on the other end of the Link.
@@ -68,17 +74,17 @@ pub struct LieStateMachine {
 
 impl LieStateMachine {
     /// Create a new LieStateMachine. The `configured_level` determines the level that the state machine
-    /// will start in. If ZTP is not used, then typically `configured_level` is not `Level::Undefined`.
-    /// Otherwise, if ZTP is used, then `configured_level` is typically `Level::Undefined`.
-    pub fn new(configured_level: Level) -> LieStateMachine {
+    /// will start in. If ZTP is not used, then typically `configured_level` is not `None`.
+    /// Otherwise, if ZTP is used, then `configured_level` is typically `None`.
+    pub fn new(configured_level: Option<Level>) -> LieStateMachine {
         LieStateMachine {
             lie_state: LieState::OneWay,
             external_event_queue: VecDeque::new(),
             chained_event_queue: VecDeque::new(),
             level: configured_level,
             highest_available_level_systems: HALS,
-            highest_available_level: Level::Undefined,
-            highest_adjacency_threeway: Level::Undefined,
+            highest_available_level: None,
+            highest_adjacency_threeway: None,
             neighbor: None,
             last_valid_lie: None,
             multiple_neighbors_timer: Timer::new(Duration::from_secs(
@@ -88,7 +94,7 @@ impl LieStateMachine {
     }
 
     /// Return the currently set level for the LIE FSM.
-    pub fn level(&self) -> Level {
+    pub fn level(&self) -> Option<Level> {
         self.level
     }
 
@@ -524,7 +530,7 @@ impl LieStateMachine {
         socket_mtu: usize,
     ) {
         tracing::trace!("PROCESS_LIE procedure");
-        let lie_level: Level = lie_header.level.into();
+        let lie_level = lie_header.level.map(|x| x as Level);
 
         // 1. if LIE has major version not equal to this node's *or*
         //       system ID equal to this node's system ID or `IllegalSystemID`
@@ -582,17 +588,17 @@ impl LieStateMachine {
         // leaf nodes.
         let (accept_lie, reason) = match (self.level, lie_level) {
             // 5.   both nodes advertise defined level values in `level` element in `PacketHeader`
-            (_, Level::Undefined) => (false, "remote level undefined (rule 5)"),
-            (Level::Undefined, _) => (false, "local level undefined (rule 5)"),
-            (Level::Value(our_level), Level::Value(remote_level)) => {
+            (_, None) => (false, "remote level undefined (rule 5)"),
+            (None, _) => (false, "local level undefined (rule 5)"),
+            (Some(our_level), Some(remote_level)) => {
                 let local_is_leaf = our_level == LEAF_LEVEL;
                 let remote_is_leaf = remote_level == LEAF_LEVEL;
                 let allow_east_west = false; // TODO: Section 4.3.9 - East - West connections.
                 let remote_below_hat = match self.highest_adjacency_threeway {
                     // if our HAT is undefined, then we have no adjacencys. Therefore, the remote's
                     // level can't possibly be below the HAT.
-                    Level::Undefined => false,
-                    Level::Value(hat) => remote_level == hat,
+                    None => false,
+                    Some(hat) => remote_level == hat,
                 };
                 let level_diff = u8::abs_diff(remote_level, our_level);
 
@@ -641,7 +647,7 @@ impl LieStateMachine {
             name: lie_packet.name.clone(), // TODO: avoid an allocation here?
             system_id: lie_header.sender,
             local_link_id: lie_packet.local_id,
-            level: lie_header.level.into(),
+            level: lie_level,
             address,
             flood_port: lie_packet.flood_port,
         };
@@ -758,7 +764,7 @@ impl LieStateMachine {
             major_version: PROTOCOL_MAJOR_VERSION,
             minor_version: PROTOCOL_MINOR_VERSION,
             sender: node_info.system_id.into(),
-            level: self.level.into(),
+            level: self.level.map(|x| x as common::LevelType),
         };
 
         // TODO: fill in these values with real data, instead of None
@@ -821,17 +827,17 @@ impl LieStateMachine {
     }
 
     // implements "update level with event value" from spec
-    fn update_level(&mut self, new_level: Level) {
+    fn update_level(&mut self, new_level: Option<Level>) {
         self.level = new_level;
     }
 
     // implements "store new HAL" from spec
-    fn store_hal(&mut self, new_hal: Level) {
+    fn store_hal(&mut self, new_hal: Option<Level>) {
         self.highest_available_level = new_hal;
     }
 
     // implements "store HAT" from spec
-    fn store_hat(&mut self, new_hat: Level) {
+    fn store_hat(&mut self, new_hat: Option<Level>) {
         self.highest_adjacency_threeway = new_hat;
     }
 
@@ -863,11 +869,7 @@ impl LieStateMachine {
     // or the CLEANUP procedure.
     fn send_offer(&self, ztp_fsm: &mut ZtpStateMachine) {
         if let Some((_, header, _)) = &self.last_valid_lie {
-            let level = if let Some(level) = header.level {
-                Level::Value(level as u8)
-            } else {
-                Level::Undefined
-            };
+            let level = header.level.map(|x| x as Level);
             if let Ok(system_id) = header.sender.try_into() {
                 let offer = Offer {
                     level,
@@ -894,7 +896,7 @@ impl LieStateMachine {
 
 #[derive(Debug, Serialize)]
 struct Neighbor {
-    level: Level,
+    level: Option<Level>,
     address: IpAddr,
     system_id: SystemIDType,
     flood_port: UDPPortType,
@@ -916,11 +918,11 @@ pub enum LieEvent {
     /// second. To be quietly ignored if transition does not exist.
     TimerTick,
     /// Node's level has been changed by ZTP or configuration. This is provided by the ZTP FSM.
-    LevelChanged(Level),
+    LevelChanged(Option<Level>),
     /// Best HAL computed by ZTP has changed. This is provided by the ZTP FSM.
-    HALChanged(Level),
+    HALChanged(Option<Level>),
     /// HAT computed by ZTP has changed. This is provided by the ZTP FSM.
-    HATChanged(Level),
+    HATChanged(Option<Level>),
     /// Set of HAL offering systems computed by ZTP has changed. This is provided by the ZTP FSM.
     HALSChanged(HALS),
     /// Received LIE on the interface.
@@ -985,34 +987,6 @@ impl LieEvent {
     }
 }
 
-/// A numerical level. A level of "Undefined" typically means that the level was either not specified
-/// (and hence will be inferred by ZTP) or it is not known yet. See also: [topology::Level]
-// TODO: are levels only in 0-24 range? if so, maybe enforce this?
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize)]
-#[serde(untagged)]
-pub enum Level {
-    Undefined,
-    Value(u8),
-}
-
-impl From<Option<common::LevelType>> for Level {
-    fn from(value: Option<common::LevelType>) -> Self {
-        match value {
-            Some(level) => Level::Value(level as u8),
-            None => Level::Undefined,
-        }
-    }
-}
-
-impl From<Level> for Option<common::LevelType> {
-    fn from(value: Level) -> Self {
-        match value {
-            Level::Undefined => None,
-            Level::Value(value) => Some(value as common::LevelType),
-        }
-    }
-}
-
 // TODO: I have no idea what this will consist of.
 #[derive(Debug, Clone, Copy, Serialize)]
 pub struct HALS;
@@ -1024,13 +998,13 @@ pub struct ZtpStateMachine {
     external_event_queue: VecDeque<ZtpEvent>,
     #[serde(skip)]
     chained_event_queue: VecDeque<ZtpEvent>,
-    configured_level: Level,
+    configured_level: Option<Level>,
     leaf_flags: LeafFlags,
     offers: HashMap<SystemID, Offer>,
     #[serde(skip)]
     holddown_timer: Timer,
-    highest_available_level: Level,
-    highest_adjacency_threeway: Level,
+    highest_available_level: Option<Level>,
+    highest_adjacency_threeway: Option<Level>,
     hal_needs_resend: bool,
     hals_needs_resend: bool,
     hat_needs_resend: bool,
@@ -1040,7 +1014,7 @@ pub struct ZtpStateMachine {
 }
 
 impl ZtpStateMachine {
-    pub fn new(configured_level: Level, leaf_flags: LeafFlags) -> ZtpStateMachine {
+    pub fn new(configured_level: Option<Level>, leaf_flags: LeafFlags) -> ZtpStateMachine {
         ZtpStateMachine {
             state: ZtpState::ComputeBestOffer,
             external_event_queue: VecDeque::new(),
@@ -1049,8 +1023,8 @@ impl ZtpStateMachine {
             leaf_flags,
             offers: HashMap::new(),
             holddown_timer: Timer::new(Duration::from_secs(DEFAULT_ZTP_HOLDTIME as u64)),
-            highest_available_level: Level::Undefined,
-            highest_adjacency_threeway: Level::Undefined,
+            highest_available_level: None,
+            highest_adjacency_threeway: None,
             hal_needs_resend: false,
             hals_needs_resend: false,
             hat_needs_resend: false,
@@ -1132,7 +1106,7 @@ impl ZtpStateMachine {
                 // here we sent events, which will be returned and eventually added to all LIE FSMs.
                 if self.hal_needs_resend {
                     events.push(LieEvent::HALChanged(self.highest_available_level));
-                    if let Level::Value(_) = self.highest_available_level {
+                    if let Some(_) = self.highest_available_level {
                         // TODO: rift-python just directly sets self._derived_level, which means they
                         // don't issue LevelChanged (which also means that the LIE FSM does not
                         // reset to OneWay)
@@ -1299,7 +1273,7 @@ impl ZtpStateMachine {
     fn compare_offers(&mut self) -> Vec<ZtpEvent> {
         let mut events = vec![];
 
-        let best_offer = self.offers.values().map(|x| x.level).max();
+        let best_offer = self.offers.values().map(|x| x.level).max().flatten();
         let best_offer_hat = self
             .offers
             .values()
@@ -1310,15 +1284,16 @@ impl ZtpStateMachine {
                     None
                 }
             })
-            .max();
+            .max()
+            .flatten();
 
-        if let Some(hal) = best_offer && self.highest_available_level != hal{
+        if best_offer.is_some() && self.highest_available_level != best_offer {
             events.push(ZtpEvent::BetterHAL);
         } else {
             events.push(ZtpEvent::LostHAL);
         }
 
-        if let Some(hat) = best_offer_hat && self.highest_adjacency_threeway != hat{
+        if best_offer_hat.is_some() && self.highest_adjacency_threeway != best_offer_hat {
             events.push(ZtpEvent::BetterHAT);
         } else {
             events.push(ZtpEvent::LostHAT);
@@ -1354,13 +1329,13 @@ impl ZtpStateMachine {
         let new_hal = self.compare_offer_results.hal;
         let new_hat = self.compare_offer_results.hat;
 
-        if let Some(new_hal) = new_hal && new_hal != self.highest_available_level {
+        if new_hal.is_some() && new_hal != self.highest_available_level {
             self.highest_available_level = new_hal;
             self.hal_needs_resend = true;
             anything_changed = true;
         }
 
-        if let Some(new_hat) = new_hat && new_hat != self.highest_adjacency_threeway {
+        if new_hat.is_some() && new_hat != self.highest_adjacency_threeway {
             self.highest_adjacency_threeway = new_hat;
             self.hat_needs_resend = true;
             anything_changed = true;
@@ -1407,8 +1382,8 @@ impl ZtpStateMachine {
     fn process_offer(&mut self, offer: Offer) {
         let _span = tracing::trace_span!("PROCESS_OFFER procedure", offer =? offer).entered();
         match offer.level {
-            Level::Undefined => self.remove_offer(&offer),
-            Level::Value(level) => {
+            None => self.remove_offer(&offer),
+            Some(level) => {
                 if level > LEAF_LEVEL {
                     self.update_offer(offer);
                 } else {
@@ -1424,7 +1399,7 @@ impl ZtpStateMachine {
     }
 
     // implements "store configured level"
-    fn store_configured_level(&mut self, new_level: Level) {
+    fn store_configured_level(&mut self, new_level: Option<Level>) {
         self.configured_level = new_level;
     }
 
@@ -1458,15 +1433,15 @@ impl ZtpStateMachine {
         }
     }
 
-    fn derived_level(&self) -> Level {
+    fn derived_level(&self) -> Option<Level> {
         match self.highest_available_level {
-            Level::Undefined => Level::Undefined,
-            Level::Value(value) => Level::Value(value.saturating_sub(1)),
+            None => None,
+            Some(value) => Some(value.saturating_sub(1)),
         }
     }
 
-    fn level(&self) -> Level {
-        if self.configured_level == Level::Undefined {
+    fn level(&self) -> Option<Level> {
+        if self.configured_level == None {
             self.derived_level()
         } else {
             self.configured_level
@@ -1492,7 +1467,7 @@ pub enum ZtpEvent {
     // node locally configured with new leaf flags.
     ChangeLocalHierarchyIndications(LeafFlags),
     // node locally configured with a defined level
-    ChangeLocalConfiguredLevel(Level),
+    ChangeLocalConfiguredLevel(Option<Level>),
     // a new neighbor offer with optional level and neighbor state.
     NeighborOffer(Offer),
     // better HAL computed internally.
@@ -1531,7 +1506,7 @@ impl ZtpEvent {
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq, Serialize)]
 pub struct Offer {
-    level: Level,
+    level: Option<Level>,
     system_id: SystemID,
     state: LieState,
     expired: bool,
